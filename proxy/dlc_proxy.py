@@ -219,7 +219,7 @@ def _touch_machine(conn, install_id: str, issued=None, source=None,
             " id_source, app_version, last_seen) VALUES (?,?,?,?,?,?)"
             " ON CONFLICT(install_id) DO UPDATE SET last_seen = ?,"
             " app_version = COALESCE(excluded.app_version, app_version)",
-            (install_id, date.today().isoformat(), issued, source,
+            (install_id, _today().isoformat(), issued, source,
              version, time.time(), time.time()))
 
 
@@ -341,7 +341,7 @@ def relay(req: LlmIn,
                           "still work."),
                 "server_misconfigured": True,
                 "usage": None, "model": req.model}
-    day = date.today().isoformat()
+    day = _today().isoformat()
     budget = CALL_BUDGETS.get(req.feature, _DEFAULT_BUDGET)
     conn = _db()
     try:
@@ -430,7 +430,7 @@ def health() -> dict:
     try:
         (m,) = conn.execute("SELECT COUNT(*) FROM machines").fetchone()
         (e,) = conn.execute("SELECT COUNT(*) FROM events").fetchone()
-        day = date.today().isoformat()
+        day = _today().isoformat()
         (day_calls,) = conn.execute(
             "SELECT COUNT(*) FROM llm_calls WHERE day = ?",
             (day,)).fetchone()
@@ -468,8 +468,7 @@ def summary(token: str | None = Query(default=None),
                 " ORDER BY first_seen")]
         for m in machines:
             if m["last_seen"]:
-                m["last_seen"] = datetime.fromtimestamp(
-                    m["last_seen"]).isoformat(timespec="seconds")
+                m["last_seen"] = _fmt_time(m["last_seen"])
             (m["events"],) = conn.execute(
                 "SELECT COUNT(*) FROM events WHERE install_id = ?",
                 (m["install_id"],)).fetchone()
@@ -514,11 +513,12 @@ def daily(token: str | None = Query(default=None),
                 " GROUP BY day, model"):
             pin, pout = _PRICES.get(model, (5.0, 25.0))
             spend[d] = spend.get(d, 0.0) + (i * pin + o * pout) / 1e6
+        ev_day = _day_sql("received_at")
         activity = [dict(zip(("day", "install_id", "events"), row))
                     for row in conn.execute(
-                        "SELECT date(received_at, 'unixepoch'), install_id,"
+                        f"SELECT {ev_day}, install_id,"
                         " COUNT(*) FROM events"
-                        " GROUP BY date(received_at, 'unixepoch'), install_id"
+                        f" GROUP BY {ev_day}, install_id"
                         " ORDER BY 1 DESC, install_id")]
         return {"llm": llm,
                 "spend_by_day": [{"day": d, "est_usd": round(v, 2)}
@@ -542,7 +542,7 @@ def admin_events(token: str | None = Query(default=None),
     try:
         where, args = [], []
         if day:
-            where.append("date(received_at, 'unixepoch') = ?")
+            where.append(_day_sql("received_at") + " = ?")
             args.append(day)
         if install_id:
             where.append("install_id = ?")
@@ -566,10 +566,9 @@ def admin_events(token: str | None = Query(default=None),
                 r["props"] = json.loads(r["props"])
             except (TypeError, ValueError):
                 r["props"] = {}
-            r["time"] = datetime.fromtimestamp(
-                r.pop("ts")).isoformat(sep=" ", timespec="seconds")
+            r["time"] = _fmt_time(r.pop("ts"))
         days = [d for (d,) in conn.execute(
-            "SELECT DISTINCT date(received_at, 'unixepoch') FROM events"
+            f"SELECT DISTINCT {_day_sql('received_at')} FROM events"
             " ORDER BY 1 DESC LIMIT 120")]
         kinds = [k for (k,) in conn.execute(
             "SELECT DISTINCT kind FROM events ORDER BY kind LIMIT 100")]
@@ -617,8 +616,7 @@ def admin_llm_texts(token: str | None = Query(default=None),
                     " ORDER BY id DESC LIMIT ? OFFSET ?",
                     (*args, per_page, (page - 1) * per_page))]
         for r in rows:
-            r["time"] = datetime.fromtimestamp(
-                r.pop("ts")).isoformat(sep=" ", timespec="seconds")
+            r["time"] = _fmt_time(r.pop("ts"))
         days = [d for (d,) in conn.execute(
             "SELECT DISTINCT day FROM llm_calls ORDER BY 1 DESC"
             " LIMIT 120")]
@@ -641,10 +639,10 @@ def admin_stats(token: str | None = Query(default=None),
                                         le=366)) -> dict:
     _check_admin(token, x_dlc_admin_token)
     from datetime import timedelta
-    since = (date.today() - timedelta(days=range_days - 1)).isoformat()
+    since = (_today() - timedelta(days=range_days - 1)).isoformat()
     conn = _db()
     try:
-        ev_day = "date(received_at, 'unixepoch')"
+        ev_day = _day_sql("received_at")
         active_by_day = [dict(zip(("day", "machines", "events"), r))
                          for r in conn.execute(
             f"SELECT {ev_day}, COUNT(DISTINCT install_id), COUNT(*)"
@@ -871,8 +869,6 @@ def admin_research(token: str | None = Query(default=None),
 
 
 # exports
-# Every export is a download (Content-Disposition), times are ISO UTC, and
-# the CSVs start with a BOM so Excel reads non-Latin names correctly.
 
 _TIME_COLS = {"ts", "client_ts", "stored_at", "received_at", "decided_at",
               "last_seen"}
@@ -899,13 +895,37 @@ _EXPORT_SQL = {
 }
 
 
-def _iso_utc(v) -> str:
-    """Epoch seconds -> '2026-09-28T21:04:37Z'; anything else unchanged."""
+def _tz():
+    name = (os.environ.get("DLC_TIMEZONE", "") or "America/New_York").strip()
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo(name)
+    except Exception:
+        return timezone.utc
+
+
+def _tz_label() -> str:
+    return datetime.now(_tz()).strftime("%Z") or "UTC"
+
+
+def _today() -> date:
+    return datetime.now(_tz()).date()
+
+
+def _day_sql(col: str) -> str:
+    """SQL for the course-zone calendar day of an epoch column."""
+    off = datetime.now(_tz()).utcoffset()
+    secs = int(off.total_seconds()) if off is not None else 0
+    return f"date({col} + {secs}, 'unixepoch')"
+
+
+def _fmt_time(v) -> str:
+    """Epoch seconds -> '2026-10-05 01:31:24 EDT'; anything else unchanged."""
     if v is None or v == "":
         return ""
     try:
-        return datetime.fromtimestamp(float(v), tz=timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ")
+        return datetime.fromtimestamp(float(v), tz=_tz()).strftime(
+            "%Y-%m-%d %H:%M:%S %Z")
     except (TypeError, ValueError, OverflowError, OSError):
         return str(v)
 
@@ -953,7 +973,7 @@ def export_csv(token: str | None = Query(default=None),
         lines = [",".join(cols)]
         for row in cur:
             lines.append(",".join(
-                _csv_cell(_iso_utc(v) if col in _TIME_COLS else v)
+                _csv_cell(_fmt_time(v) if col in _TIME_COLS else v)
                 for col, v in zip(cols, row)))
         return _csv_download(f"{table}.csv", lines)
     finally:
@@ -982,7 +1002,7 @@ def admin_signatures_zip(token: str | None = Query(default=None),
                 fn = f"sig_{cid}.png"
                 zf.writestr(fn, png)
                 index.append(",".join(_csv_cell(x) for x in
-                                      (cid, iid, name, _iso_utc(dat), fn)))
+                                      (cid, iid, name, _fmt_time(dat), fn)))
             zf.writestr("index.csv", "﻿" + "\n".join(index) + "\n")
     finally:
         conn.close()
@@ -1009,10 +1029,10 @@ _CONSENT_LOG_PAGE = """<!doctype html>
 </style></head><body>
 <h1>Digital Lab Coach — consent log, study __STUDY__</h1>
 <div class="muted">__N__ decisions: __AGREED__ agreed, __DECLINED__ declined
- · generated __GENERATED__ (UTC) · every decision the course server received,
+ · generated __GENERATED__ · times in __TZ__ · every decision the course server received,
  oldest first; signatures as drawn in the tool</div>
 <button onclick="window.print()">Print / save as PDF</button>
-<table><thead><tr><th>#</th><th>decided (UTC)</th><th>decision</th>
+<table><thead><tr><th>#</th><th>decided</th><th>decision</th>
 <th>typed name</th><th>machine</th><th>sheet</th><th>app</th><th>signature</th>
 </tr></thead><tbody>
 __ROWS__
@@ -1042,7 +1062,7 @@ def admin_consent_log(token: str | None = Query(default=None),
                    + base64.b64encode(png).decode("ascii") + '">')
         else:
             img = '<span class="muted">typed only</span>' if dec == "agreed" else ""
-        cells = (str(cid), _h(_iso_utc(dat if dat is not None else rec)),
+        cells = (str(cid), _h(_fmt_time(dat if dat is not None else rec)),
                  _h(dec or ""), _h(name or ""),
                  f"<code>{_h((iid or '')[:8])}</code>", _h(ver or ""),
                  _h(appv or ""), img)
@@ -1052,7 +1072,8 @@ def admin_consent_log(token: str | None = Query(default=None),
                      ("__N__", str(len(rows))),
                      ("__AGREED__", str(sum(1 for r in rows if r[3] == "agreed"))),
                      ("__DECLINED__", str(sum(1 for r in rows if r[3] == "declined"))),
-                     ("__GENERATED__", _iso_utc(time.time())),
+                     ("__GENERATED__", _fmt_time(time.time())),
+                     ("__TZ__", _h(_tz_label())),
                      ("__ROWS__", "\n".join(trs) or
                       '<tr><td colspan="8" class="muted">no decisions recorded yet</td></tr>')):
         page = page.replace(key, val)
@@ -1227,7 +1248,7 @@ _ADMIN_PAGE = """<!doctype html>
          <button id="rs-x-surveys">&#11015; surveys.csv</button>
        </div>
        <p class="muted" style="margin:8px 0 0">consents.csv: every decision with the typed name; its <code>signature_png</code> column names the drawing inside signatures.zip.
-         The consent log shows the same rows with the signatures inline, ready to print. surveys.csv: one row per answered survey; blank cells mean that question was not part of it. All times are UTC.</p></div>
+         The consent log shows the same rows with the signatures inline, ready to print. surveys.csv: one row per answered survey; blank cells mean that question was not part of it. Times are in the course time zone (DLC_TIMEZONE, default America/New_York).</p></div>
    </section>
  </div>
 </main>

@@ -164,7 +164,7 @@ def test_decision_reaches_the_proxy_and_decline_withdraws_events(cenv, monkeypat
                         "signature_png,app_version,decided_at,received_at")
     cells = lines[1].split(",")
     assert cells[4:7] == ["agreed", "Ada Lovelace", "sig_1.png"]
-    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", cells[8])
+    assert re.fullmatch(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d [A-Z]{2,5}", cells[8])
     assert "base64" not in r.text
     # the drawing itself: a PNG per agreed row, plus an index
     z = zipfile.ZipFile(io.BytesIO(pc.get("/admin/signatures.zip", headers=hdr).content))
@@ -210,7 +210,7 @@ def test_survey_answers_are_counted_and_exported(cenv, monkeypatch):
     lines = csv.lstrip("\ufeff").strip().split("\n")
     assert lines[0] == "install_id,ts,feature,filename,helpful,answered,comment"
     assert len(lines) == 3 and "show the row" in csv
-    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", lines[1].split(",")[1])
+    assert re.fullmatch(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d [A-Z]{2,5}", lines[1].split(",")[1])
     assert lines[2].endswith(",modeB,,somewhat,no,")     # blank = not asked / not typed
 
 

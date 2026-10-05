@@ -41,6 +41,7 @@ Two ways, both in the instructor guide
 | `DLC_PROXY_DB` | the SQLite ledger (default `./dlc_proxy.db`; the container sets `/data/dlc_proxy.db`); keep it outside the repo |
 | `DLC_STUDY_ID` | the IRB study number, e.g. `26-2770`. Set, the tool shows the consent sheet once per machine and events ship only from machines that agreed; unset, nobody is asked and nothing ships |
 | `DLC_SURVEY_RATE` | chance (0–1, default `0.35`) that a one-question feedback survey follows a coach answer on an agreed machine, after each feature's first time; `1` for testing |
+| `DLC_TIMEZONE` | the course time zone (default `America/New_York`) |
 
 `GET /v1/health` reports `course_token_set`, `admin_token_set`,
 `key_configured` and `key_format_ok`; all four must read `true` before
@@ -60,7 +61,6 @@ the course token under Settings → Course server; the tool stores them in
 | `POST /v1/consent` | Stores a machine's consent decision: install id, sheet version, agreed or declined, typed name, drawn signature. A declined decision deletes that machine's events. |
 | `GET /v1/health` | Liveness, counts, the four configuration flags above, `study_id` and `survey_rate`. |
 | `GET /admin/view` | The dashboard; asks for the admin token once. Its JSON feeds are `/admin/summary`, `/admin/daily`, `/admin/events`, `/admin/llm_texts`, `/admin/stats`, `/admin/research` (`?token=…` or header `X-DLC-Admin-Token`). |
-| `GET /admin/export.csv?token=…&table=events\|machines\|llm_calls\|consents\|surveys` | CSV downloads for the evaluation pipeline; times are ISO UTC, names appear in `consents` only. |
 | `GET /admin/signatures.zip` | Every drawn signature as `sig_<id>.png`, the names `consents.csv` refers to, plus `index.csv`. |
 | `GET /admin/consents.html` | A printable consent log: every decision with the typed name and the signature inline. |
 

@@ -13,6 +13,7 @@ dependencies = [
     "uvicorn[standard]>=0.32.0",
     "openai>=1.50.0",
     "matplotlib>=3.11.0",
+    "tzdata>=2024.1",
 ]
 
 [dependency-groups]

@@ -358,7 +358,7 @@ def test_budget_counts_inflight_reservations(tele_env, monkeypatch):
             "INSERT INTO llm_calls (install_id, day, ts, feature, model, "
             "ok, in_tokens, out_tokens, ms, error) "
             "VALUES (?,?,?,?,?,0,NULL,NULL,NULL,'pending')",
-            ("m-rsv", date.today().isoformat(), 0.0, "modeA",
+            ("m-rsv", dlc_proxy._today().isoformat(), 0.0, "modeA",
              "claude-opus-5"))
     conn.close()
     out = pc.post("/v1/llm", json=body).json()
