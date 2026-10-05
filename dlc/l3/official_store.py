@@ -12,48 +12,36 @@ def store_path() -> Path:
     env = os.environ.get("DLC_OFFICIAL_TESTS_PATH")
     return Path(env) if env else Path.home() / ".dlc" / "official_tests.json"
 
-import re as _re
-
-_TEST_KEYWORD_RE = _re.compile(
-    r"(?i)^(let|repeat|loop|while|init|declare|memory|program|"
-    r"resetrandom|end)\b")
-
 
 def validate_test_content(content: str) -> None:
+    """Refuse text Digital itself would refuse, plus two DLC rules: the
+    first line is the header, and there is at least one row."""
     from dlc.testing.spec import _strip_inline_comment, _tokenize
-    header: list[str] | None = None
-    data_rows = 0
+    from dlc.testing.testlang import expand_test
+
+    first = None
     for i, line in enumerate((content or "").splitlines(), start=1):
         text = _strip_inline_comment(line).strip()
-        if not text:
-            continue
-        cells = text.split()
-        if header is None:
-            kinds = {_tokenize(c).kind for c in cells}
-            if kinds <= {"int", "clock", "highZ", "dontcare", "loop_expr"}:
-                raise ValueError(
-                    "not Digital test format: the first line must be the "
-                    "header (signal names), but line "
-                    f"{i} looks like a value row: {text!r}")
-            header = cells
-            continue
-        if _TEST_KEYWORD_RE.match(cells[0]):
-            data_rows += 1
-            continue
-        bad = [c for c in cells if _tokenize(c).kind == "unknown"]
-        if bad:
-            raise ValueError(
-                f"not Digital test format: line {i} has unrecognized "
-                f"cell{'s' if len(bad) > 1 else ''} "
-                f"{', '.join(repr(b) for b in bad)}: {text!r}")
-        if len(cells) != len(header):
-            raise ValueError(
-                f"not Digital test format: line {i} has {len(cells)} "
-                f"cells but the header has {len(header)} columns: {text!r}")
-        data_rows += 1
-    if header is None:
+        if text:
+            first = (i, text)
+            break
+    if first is None:
         raise ValueError("not Digital test format: no header line found.")
-    if data_rows == 0:
+    i, text = first
+    kinds = {_tokenize(c).kind for c in text.split()}
+    if kinds <= {"int", "clock", "highZ", "dontcare", "loop_expr"}:
+        raise ValueError(
+            "not Digital test format: the first line must be the "
+            "header (signal names), but line "
+            f"{i} looks like a value row: {text!r}")
+    ex = expand_test(content)
+    if ex.error:
+        raise ValueError(f"not Digital test format: {ex.error}")
+    if ex.row_error:
+        raise ValueError(
+            f"not Digital test format: {ex.row_error[:-1]} "
+            f"(the header has {len(ex.headers)} columns).")
+    if not ex.rows and not ex.dynamic:
         raise ValueError("not Digital test format: a header but no test "
                          "rows.")
 

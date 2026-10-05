@@ -100,11 +100,12 @@ def _write_single_row_dig(
     original_dig_path: str,
     headers: list[str],
     row_raw: str,
+    preamble: list[str] | None = None,
 ) -> str:
-    """..."""
     src_path = Path(original_dig_path)
     src = src_path.read_text(encoding="utf-8")
-    new_body = " ".join(headers) + "\n" + row_raw
+    lines = [" ".join(headers)] + list(preamble or []) + [row_raw]
+    new_body = "\n".join(lines)
     new_content, count = _DATASTRING_RE.subn(
         lambda m: m.group(1) + new_body + m.group(2),
         src,
@@ -145,6 +146,16 @@ def per_row_run_iter(
     prev_fail_count = 0
     runnable_so_far: list[str] = []
 
+    if spec.has_unexpanded_loops:
+        why = spec.unexpanded_reason or "the rows depend on the running circuit"
+        for row in spec.rows:
+            yield PerRowResult(
+                spec_name=spec.name, row_index=row.line_index,
+                status="no_run",
+                error_message=f"rows cannot be pre-computed: {why}",
+            )
+        return
+
     for row in spec.rows:
         if row.is_malformed:
             yield PerRowResult(
@@ -152,18 +163,12 @@ def per_row_run_iter(
                 status="no_run", error_message="malformed row",
             )
             continue
-        if any(t.kind == "loop_expr" for t in row.values):
-            yield PerRowResult(
-                spec_name=spec.name, row_index=row.line_index,
-                status="no_run",
-                error_message="row contains loop expression; expansion not implemented",
-            )
-            continue
 
         runnable_so_far.append(row.raw)
         prefix_text = "\n".join(runnable_so_far)
         temp_path = _write_single_row_dig(
             original_dig_path, spec.headers, prefix_text,
+            preamble=spec.preamble,
         )
         try:
             code, output = run_digital_cli(temp_path, jar_path, timeout=timeout)

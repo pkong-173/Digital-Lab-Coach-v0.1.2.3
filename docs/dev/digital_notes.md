@@ -210,9 +210,15 @@ Facts the fast runner (`dlc/testing/runner.py`) relies on, all
 verified empirically:
 
 - First table line = the testcase's header names, space-separated.
-- One table line per EXECUTED row, in execution order. Digital
-  expands `loop(N, K) … end loop` blocks itself — the same expansion
-  DLC's TestSpec performs — so table line *i* ↔ `spec.rows[i]`.
+- One table line per EXECUTED row, in execution order. DLC expands the
+  testcase text with its own implementation of Digital's test language
+  (`dlc/testing/testlang.py`: nested `loop`, `repeat`, `bits()`,
+  `let`, the full expression grammar, octal-for-leading-zero numbers),
+  so table line *i* ↔ `spec.rows[i]`. A test whose rows depend on the
+  running circuit (`while` or `let` on an output signal, `random()`)
+  is marked `unexpanded_reason` and gets the whole-test verdict only.
+  `init`, `memory`, `program` and `declare` statements are kept as
+  `spec.preamble` and re-emitted whenever DLC writes rows to a temp file.
 - A row with a `C` clock token still yields exactly ONE table line
   (the clock column echoes the post-pulse value, e.g. `0`).
 - A failing row renders each mismatched output cell as

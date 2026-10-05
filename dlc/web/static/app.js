@@ -1832,6 +1832,7 @@ function renderTestResults(payload) {
 
     return `
       <div class="spec-title">${escapeHtml(spec.name)} &middot; ${spec.rows.length} row${spec.rows.length === 1 ? "" : "s"}</div>
+      ${specNoteHtml(spec)}
       <table>
         <thead><tr>${headerCells}</tr></thead>
         <tbody>${rowsHtml}</tbody>
@@ -1839,6 +1840,19 @@ function renderTestResults(payload) {
     `;
   }).join("");
   testsResultsEl.innerHTML = html;
+}
+
+// What Digital itself would say about the testcase text: a syntax error
+// (the whole test is refused), or rows it computes while running (DLC
+// can only show the whole-test verdict then).
+function specNoteHtml(spec) {
+  if (spec.parse_error) {
+    return `<div class="spec-headline"><span class="pct-fail">Digital rejects this testcase: ${escapeHtml(spec.parse_error)}</span></div>`;
+  }
+  if (spec.unexpanded_reason) {
+    return `<div class="spec-headline"><span class="neutral">rows are computed by Digital while the test runs (${escapeHtml(spec.unexpanded_reason)}), so only the whole-test verdict is shown</span></div>`;
+  }
+  return "";
 }
 
 
@@ -2060,6 +2074,7 @@ function renderGeneralResults(payload) {
   const html = payload.specs.map((spec) => {
     const headline = renderGeneralHeadline(spec);
     return `<div class="spec-title">${escapeHtml(spec.name)} &middot; ${spec.row_count} row${spec.row_count === 1 ? "" : "s"}</div>
+            ${specNoteHtml(spec)}
             <div class="spec-headline">${headline}</div>`;
   }).join("");
   testsResultsEl.innerHTML = html;

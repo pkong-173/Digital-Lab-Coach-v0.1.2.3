@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
 
 from dlc.parser.models import Circuit
-import re
 
 @dataclass(frozen=True)
 class Token:
@@ -40,6 +39,10 @@ class TestSpec:
     rows: list[TestRow]
     raw_data_string: str
     has_unexpanded_loops: bool
+    preamble: list[str] = field(default_factory=list)
+    unexpanded_reason: str | None = None
+    # Digital's own objection to the text, when it has one
+    parse_error: str | None = None
 
     def row_count(self) -> int:
         return len(self.rows)
@@ -50,12 +53,14 @@ class TestSpec:
 # Tokenization
 
 def _tokenize(raw: str) -> Token:
-    """Parse a single whitespace-stripped cell into a Token."""
+    """Parse a single whitespace-stripped cell into a Token. Used for cells
+    DLC builds itself (coach rows, official-test cells); a whole Testcase
+    goes through parse_data_string, which knows the full language."""
     s = raw.strip()
     if not s:
         return Token(raw=s, kind="unknown", value=None)
 
-    if s == "C":
+    if s in ("c", "C"):
         return Token(raw=s, kind="clock", value=None)
     if s in ("z", "Z"):
         return Token(raw=s, kind="highZ", value=None)
@@ -100,98 +105,46 @@ def _strip_inline_comment(line: str) -> str:
         return line
     return line[:idx]
 
-_LOOP_OPEN_RE = re.compile(r'^loop\(\s*(\w+)\s*,\s*(\d+)\s*\)$')
+
+@dataclass
+class ParsedTestData:
+    __test__ = False
+
+    headers: list[str]
+    rows: list[TestRow]
+    has_unexpanded: bool
+    preamble: list[str]
+    unexpanded_reason: str | None
+    parse_error: str | None
 
 
-def _expand_loop_line(line: str, var: str, n: int) -> str:
-    pattern = re.compile(rf'\(\s*{re.escape(var)}\s*([+\-])?\s*(\d+)?\s*\)')
-    def repl(m):
-        op, num = m.group(1), m.group(2)
-        if op is None and num is None:
-            val = n
-        elif op == '+':
-            val = n + int(num)
-        elif op == '-':
-            val = n - int(num)
+def parse_data_string_full(text: str) -> ParsedTestData:
+    from dlc.testing.testlang import expand_test
+
+    ex = expand_test(text or "")
+    rows: list[TestRow] = []
+    n = len(ex.headers)
+    for i, cells in enumerate(ex.rows):
+        raw = " ".join(c.raw for c in cells)
+        if len(cells) != n:
+            rows.append(TestRow(raw=raw, values=[], line_index=i,
+                                is_malformed=True))
         else:
-            return m.group(0)
-        return f'({val})' if val < 0 else str(val)
-    return pattern.sub(repl, line)
-
-def _is_loop_marker(line: str) -> bool:
-    s = line.strip()
-    if s.startswith("loop(") and s.endswith(")"):
-        return True
-    if s == "end loop":
-        return True
-    return False
+            rows.append(TestRow(
+                raw=raw, line_index=i, is_malformed=False,
+                values=[Token(raw=c.raw, kind=c.kind, value=c.value)
+                        for c in cells]))
+    return ParsedTestData(
+        headers=list(ex.headers), rows=rows,
+        has_unexpanded=ex.dynamic is not None,
+        preamble=list(ex.preamble),
+        unexpanded_reason=ex.dynamic,
+        parse_error=ex.error or ex.row_error)
 
 
 def parse_data_string(text: str) -> tuple[list[str], list[TestRow], bool]:
-    
-    headers: list[str] = []
-    rows: list[TestRow] = []
-    has_unexpanded = False
-    next_row_index = 0
-
-    in_loop = False
-    loop_var: str | None = None
-    loop_count = 0
-    loop_body: list[str] = []
-
-    def emit(stripped: str) -> None:
-        nonlocal next_row_index, has_unexpanded
-        tokens_raw = stripped.split()
-        if len(tokens_raw) != len(headers):
-            rows.append(TestRow(
-                raw=stripped, values=[], line_index=next_row_index,
-                is_malformed=True,
-            ))
-        else:
-            row_tokens = [_tokenize(t) for t in tokens_raw]
-            rows.append(TestRow(
-                raw=stripped, values=row_tokens, line_index=next_row_index,
-                is_malformed=False,
-            ))
-            if any(t.kind == "loop_expr" for t in row_tokens):
-                has_unexpanded = True
-        next_row_index += 1
-
-    for raw_line in text.splitlines():
-        stripped = _strip_inline_comment(raw_line).strip()
-        if not stripped:
-            continue
-
-        loop_match = _LOOP_OPEN_RE.match(stripped)
-        if loop_match:
-            in_loop = True
-            loop_var = loop_match.group(1)
-            loop_count = int(loop_match.group(2))
-            loop_body = []
-            continue
-        if stripped == "end loop":
-            if loop_var is not None and loop_count > 0:
-                for n in range(loop_count):
-                    for body_line in loop_body:
-                        emit(_expand_loop_line(body_line, loop_var, n))
-            in_loop = False
-            loop_var = None
-            loop_count = 0
-            loop_body = []
-            continue
-        if in_loop:
-            loop_body.append(stripped)
-            continue
-
-        if not headers:
-            headers = stripped.split()
-            continue
-        emit(stripped)
-
-    if in_loop:
-        has_unexpanded = True
-
-    return headers, rows, has_unexpanded
+    p = parse_data_string_full(text)
+    return p.headers, p.rows, p.has_unexpanded
 
 
 # Public API
@@ -206,15 +159,18 @@ def extract_test_specs(circuit: Circuit) -> list[TestSpec]:
         raw = comp.attributes.get("Testdata", "")
         if not isinstance(raw, str):
             raw = ""
-        headers, rows, has_loops = parse_data_string(raw)
+        p = parse_data_string_full(raw)
         name = comp.label or f"Testcase_{idx}"
         specs.append(TestSpec(
             name=name,
             component_index=idx,
-            headers=headers,
-            rows=rows,
+            headers=p.headers,
+            rows=p.rows,
             raw_data_string=raw,
-            has_unexpanded_loops=has_loops,
+            has_unexpanded_loops=p.has_unexpanded,
+            preamble=p.preamble,
+            unexpanded_reason=p.unexpanded_reason,
+            parse_error=p.parse_error,
         ))
     return specs
 

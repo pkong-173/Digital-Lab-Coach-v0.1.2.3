@@ -157,8 +157,12 @@ def test_map_section_row_count_mismatch_requests_fallback():
 
 
 def test_spec_with_unexpanded_loops_is_not_fast_safe():
-    spec = _spec("t", "A B\nloop(N, 3)\n(N+1) (N+1)\n")
+    # a while on a circuit output: Digital computes the rows while running
+    spec = _spec("t", "A Q\nwhile(Q != 3)\nC 0\nend while\n")
     assert spec.has_unexpanded_loops
+    assert not _spec_is_fast_safe(spec)
+    spec = _spec("t", "A B\nloop(N, 3)\n(N+1) (N+1)\n")
+    assert not spec.has_unexpanded_loops and spec.rows == []
     assert not _spec_is_fast_safe(spec)
 
 

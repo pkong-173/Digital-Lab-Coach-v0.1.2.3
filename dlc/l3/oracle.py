@@ -339,7 +339,8 @@ def rerun_with_second(
             source_text = extend_program_rom_text(source_text, words)
 
         data_string = "\n".join(
-            [" ".join(base_spec.headers)] + warmups + [r.raw for r in rows])
+            [" ".join(base_spec.headers)] + list(base_spec.preamble)
+            + warmups + [r.raw for r in rows])
         source_text = add_testcase_text(source_text, label, data_string)
     except ValueError as exc:
         return InjectionOutcome(ok=False, warning=str(exc))

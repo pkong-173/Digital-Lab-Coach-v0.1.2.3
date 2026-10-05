@@ -139,7 +139,12 @@ def test_content_must_be_digital_test_format():
     with pytest.raises(ValueError, match=".dig"):
         ost.save_test("cpu.txt", "A B\n1 0")
     ost.save_test("my.dig", "A B Y  # header\n0 0 0\nC X Z\n(-3) 0x1F 0b10")
-    ost.save_test("my2.dig", "A B\nrepeat(3) 1 0\nloop(i,4) (i) (i*2)\n1 1")
+    ost.save_test("my2.dig", "A B\nrepeat(3) 1 0\nloop(i,4)\n(i) (i*2)\nend loop\n1 1")
+    # what Digital refuses, DLC refuses: a loop without its end, a bare
+    # negative number, an unknown function
+    for bad in ("A B\nloop(i,4) (i) (i*2)\n1 1", "A B\n-1 0", "A B\n(foo(1)) 0"):
+        with pytest.raises(ValueError, match="Digital test format"):
+            ost.save_test("my3.dig", bad)
     assert {t["filename"] for t in ost.list_tests()} >= {"my.dig", "my2.dig"}
     r = client.post("/api/config/official_tests", json={
         "filename": "my.dig", "content": "garbage !!"})

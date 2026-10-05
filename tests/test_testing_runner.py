@@ -194,7 +194,7 @@ def test_loop_expr_row_recorded_as_no_run(tmp_path):
                    return_value="/fake/Digital.jar"):
             results = per_row_run(spec, str(src))
     assert results[0].status == "no_run"
-    assert "loop" in (results[0].error_message or "").lower()
+    assert "cannot be pre-computed" in (results[0].error_message or "")
     assert mock_run.call_count == 0
 
 def test_attach_per_row_results_populates_runs_in_place(tmp_path):

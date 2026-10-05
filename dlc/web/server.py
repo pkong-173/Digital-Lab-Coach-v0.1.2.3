@@ -494,6 +494,12 @@ def _prepare_injection(target: dict):
         return target["path"], None, [], None
 
 
+def _spec_notes(spec) -> dict:
+    """What Digital itself would say about the testcase text"""
+    return {"parse_error": getattr(spec, "parse_error", None),
+            "unexpanded_reason": getattr(spec, "unexpanded_reason", None)}
+
+
 def _run_general(target: dict, timeout: float) -> dict:
     from dlc.testing.inject import cleanup_injected
     try:
@@ -553,6 +559,7 @@ def _run_general(target: dict, timeout: float) -> dict:
                 "pass_pct": None,
                 "fail_pct": None,
                 "row_count": len(spec.rows),
+                **_spec_notes(spec),
             })
             any_failed = True
             continue
@@ -569,6 +576,7 @@ def _run_general(target: dict, timeout: float) -> dict:
             "pass_pct": pass_pct,
             "fail_pct": fail_pct,
             "row_count": len(spec.rows),
+            **_spec_notes(spec),
         })
     target["last_all_passed"] = not any_failed
     return {
@@ -785,6 +793,7 @@ def tests_all(req: TestsAllRequest) -> dict:
                     "pass_pct": None, "fail_pct": None,
                     "row_count": len(spec.rows), "failing_rows": None,
                     "error_message": sec.error_message if sec else None,
+                    **_spec_notes(spec),
                 })
                 continue
             if sec.status == "passed":
@@ -792,6 +801,7 @@ def tests_all(req: TestsAllRequest) -> dict:
                     "name": spec.name, "status": "passed",
                     "pass_pct": 100, "fail_pct": 0,
                     "row_count": len(spec.rows), "failing_rows": 0,
+                    **_spec_notes(spec),
                 })
                 continue
             any_failed = True
@@ -803,6 +813,7 @@ def tests_all(req: TestsAllRequest) -> dict:
                 "name": spec.name, "status": "failed",
                 "pass_pct": 100 - fail_pct, "fail_pct": fail_pct,
                 "row_count": len(spec.rows), "failing_rows": failing_rows,
+                **_spec_notes(spec),
             })
         if any_error:
             entry.update(status="error", all_passed=None)
@@ -972,6 +983,7 @@ def run_tests(req: TestsRequest) -> dict:
                 "name": spec.name,
                 "headers": spec.headers,
                 "rows": row_payload,
+                **_spec_notes(spec),
             })
     finally:
         cleanup_injected(inj_temp)

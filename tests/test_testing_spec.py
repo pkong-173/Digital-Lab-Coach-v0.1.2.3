@@ -7,7 +7,8 @@ from pathlib import Path
 from dlc.parser.dig_parser import parse_dig_file
 from dlc.testing.spec import (
     Token, TestRow, TestSpec, VariableBinding,
-    _tokenize, parse_data_string, extract_test_specs, match_variables_to_io,
+    _tokenize, parse_data_string, parse_data_string_full,
+    extract_test_specs, match_variables_to_io,
 )
 
 
@@ -48,9 +49,10 @@ def test_tokenize_parens_positive():
     assert t.kind == "int" and t.value == 5
 
 
-def test_tokenize_clock_pulse_uppercase_only():
+def test_tokenize_clock_pulse_either_case():
+    # Digital upper-cases the cell before reading it, so "c" is a clock too
     assert _tokenize("C").kind == "clock"
-    assert _tokenize("c").kind == "unknown"
+    assert _tokenize("c").kind == "clock"
 
 
 def test_tokenize_highz_and_dontcare():
@@ -134,19 +136,37 @@ def test_loop_expansion_handles_negative_results():
     assert [r.values[1].value for r in rows] == [-60, -59, -58]
     assert [r.values[0].value for r in rows] == [1, 2, 3]
 
-def test_unrecognized_loop_variable_keeps_loop_expr_and_flags_unexpanded():
+def test_unknown_variable_means_digital_reads_the_circuit():
     text = "A\nloop(N, 3)\n(M)\nend loop\n"
-    _, rows, has_unexpanded = parse_data_string(text)
-    assert len(rows) == 3
-    assert all(r.values[0].kind == "loop_expr" for r in rows)
-    assert has_unexpanded
+    p = parse_data_string_full(text)
+    assert p.rows == [] and p.has_unexpanded
+    assert "'M'" in p.unexpanded_reason and p.parse_error is None
 
 
-def test_unclosed_loop_block_flags_unexpanded():
+def test_unclosed_loop_block_is_a_digital_syntax_error():
     text = "A\nloop(N, 3)\n(N+1)\n"
-    _, rows, has_unexpanded = parse_data_string(text)
-    assert rows == []
-    assert has_unexpanded
+    p = parse_data_string_full(text)
+    assert p.rows == [] and not p.has_unexpanded
+    assert p.parse_error.startswith("Unexpected token (EOF)")
+
+
+def test_nested_loops_bits_and_expressions_expand_like_digital():
+    text = ("A B C X Y Z\n\nloop(A,2)\n   loop(B,2)\n      loop(C,2)\n"
+            "         bits(1,A) bits(1,B) bits(1,C) bits(1, (!A&!C) | (A&B))"
+            " bits(1, !B|!C) bits(1, (!A&!B&!C) | (A&C))\n"
+            "      end loop\n   end loop\nend loop")
+    headers, rows, has_unexpanded = parse_data_string(text)
+    assert headers == ["A", "B", "C", "X", "Y", "Z"]
+    assert len(rows) == 8 and not has_unexpanded
+    assert all(not r.is_malformed for r in rows)
+    assert rows[5].raw == "1 0 1 0 1 1"
+    assert [t.value for t in rows[7].values] == [1, 1, 1, 1, 0, 1]
+
+
+def test_model_statements_are_kept_as_the_preamble():
+    p = parse_data_string_full("Clk Q\ninit Q=0;\nprogram(1,2)\nC 1\n")
+    assert p.preamble == ["init Q=0;", "program(1,2)"]
+    assert len(p.rows) == 1 and p.rows[0].raw == "C 1"
 
 
 def test_multiple_loops_in_one_datastring():
