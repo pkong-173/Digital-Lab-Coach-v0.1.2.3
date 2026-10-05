@@ -22,8 +22,11 @@ echo "Preparing packages - the first run can take a few minutes..."
 uv sync
 
 export DLC_ENFORCE_LIMITS=1
-# The server opens the browser itself, the moment it is ready to answer.
+# The server opens the browser itself, the moment it is ready to answer,
+# and stops itself when the last DLC tab is closed.
 export DLC_OPEN_BROWSER=1
+export DLC_AUTO_EXIT=1
 echo "Starting Digital Lab Coach at http://127.0.0.1:8765 ..."
 echo "Your browser opens by itself when the app is ready (the first start can take a minute)."
+echo "Closing the DLC page in the browser stops the app; this window can then be closed."
 uv run python -m dlc.web.server

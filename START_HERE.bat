@@ -35,9 +35,16 @@ if errorlevel 1 (
 )
 
 set DLC_ENFORCE_LIMITS=1
-rem The server opens the browser itself, the moment it is ready to answer.
+rem The server opens the browser itself, the moment it is ready to answer,
+rem and stops itself when the last DLC tab is closed; this window then closes.
 set DLC_OPEN_BROWSER=1
+set DLC_AUTO_EXIT=1
 echo Starting Digital Lab Coach at http://127.0.0.1:8765 ...
 echo Your browser opens by itself when the app is ready (the first start can take a minute).
+echo Closing the DLC page in the browser stops the app and closes this window.
 uv run python -m dlc.web.server
-pause
+if errorlevel 1 (
+  echo.
+  echo Digital Lab Coach stopped with an error - see the messages above.
+  pause
+)

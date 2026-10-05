@@ -1731,6 +1731,49 @@ def llm_grade(req: LlmGradeRequest) -> dict:
         grader_model=req.grader_model,
     )
 
+_SERVER = None
+_PRESENCE: dict = {"last": 0.0, "exit_reason": None}
+
+
+def _auto_exit_enabled() -> bool:
+    return os.environ.get("DLC_AUTO_EXIT", "").strip() in ("1", "true", "yes")
+
+
+def _auto_exit_grace() -> float:
+    try:
+        return max(0.2, float(os.environ.get("DLC_AUTO_EXIT_GRACE", "") or 8.0))
+    except ValueError:
+        return 8.0
+
+
+@app.post("/api/presence")
+def presence_ping() -> dict:
+    _PRESENCE["last"] = time.time()
+    return {"ok": True}
+
+
+@app.post("/api/presence/bye")
+def presence_bye() -> dict:
+    if not _auto_exit_enabled():
+        return {"ok": True, "auto_exit": False}
+    grace = _auto_exit_grace()
+    t = threading.Timer(grace, _exit_if_abandoned, args=(grace,))
+    t.daemon = True
+    t.start()
+    return {"ok": True, "auto_exit": True}
+
+
+def _exit_if_abandoned(grace: float) -> None:
+    if time.time() - _PRESENCE["last"] < grace * 0.75:
+        return                        # a tab is still alive
+    server = _SERVER
+    if server is None or _PRESENCE.get("exit_reason"):
+        return
+    _PRESENCE["exit_reason"] = "page closed"
+    print("Digital Lab Coach: the page was closed - stopping.", flush=True)
+    server.should_exit = True
+
+
 def _open_browser_when_ready(url: str, host: str, port: int,
                              timeout: float = 240.0) -> None:
     """Open the browser only once the server answers on its port, so the
@@ -1754,18 +1797,23 @@ def _open_browser_when_ready(url: str, host: str, port: int,
 
 def main() -> None:
     import uvicorn
+    import dlc.web.server as srv
     host, port = "127.0.0.1", 8765
     if os.environ.get("DLC_OPEN_BROWSER", "").strip() in ("1", "true", "yes"):
         threading.Thread(
             target=_open_browser_when_ready,
             args=(f"http://{host}:{port}", host, port), daemon=True).start()
-    uvicorn.run(
-        "dlc.web.server:app",
-        host=host,
-        port=port,
-        reload=False,
-        log_level="info",
+    config = uvicorn.Config(
+        srv.app, host=host, port=port, log_level="info",
+        timeout_graceful_shutdown=5,
     )
+    server = uvicorn.Server(config)
+    srv._SERVER = server
+    server.run()
+    if srv._PRESENCE.get("exit_reason"):
+        print("Digital Lab Coach stopped: the page was closed. "
+              "Double-click START_HERE.bat or run ./start.sh to start again.",
+              flush=True)
 
 
 if __name__ == "__main__":
