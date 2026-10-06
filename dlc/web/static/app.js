@@ -386,6 +386,7 @@ let loaded      = [];
 let currentIdx  = 0;
 let cy          = null;
 let sigActive   = null;   // {specIdx, rowIdx} of the row driving the overlay
+let sigRequest  = 0;      // the latest row click; an older reply is ignored
 let clockTimer  = null;   // set while the clock is ticking through rows
 let clockDone   = false;  // true once ticking reached the last row (offer restart)
 let drillCy     = null;   // Cytoscape instance inside the drill-in overlay
@@ -1877,6 +1878,7 @@ async function showSignalFlowForRow(specIdx, rowIdx, trEl) {
     .forEach((t) => t.classList.remove("sig-selected"));
   if (trEl) trEl.classList.add("sig-selected");
 
+  const request = ++sigRequest;
   let sim;
   try {
     const res = await fetch("/api/simulate", {
@@ -1893,6 +1895,7 @@ async function showSignalFlowForRow(specIdx, rowIdx, trEl) {
     console.warn("simulate error", err);
     return;
   }
+  if (request !== sigRequest) return;
   if (!sim || sim.ok === false) return;
   applySignalFlow(sim);
   sigActive = { specIdx, rowIdx };
