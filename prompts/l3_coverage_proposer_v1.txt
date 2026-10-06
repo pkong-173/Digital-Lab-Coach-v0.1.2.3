@@ -93,6 +93,12 @@ prove the operation itself.
   testcase's headers EXACTLY, in order, one cell per column.
 - Use the same literal style the file already uses: plain decimal, 0x...
   hex, 0b... binary, (-n) for negatives, C for a clock edge column.
+- A target with "synthetic": true has NO testcase yet ("existing_rows" is
+  empty): every input value, output and category is untested. Write the
+  first rows the student should have: plain decimal for columns up to 4
+  bits, 0x... hex for wider ones, (-n) for negatives, C in the clock
+  column. Start with the rows that prove the circuit's main operation,
+  then the boundaries.
 - Concrete values only — no loops, no variables, no expressions.
 - Expected-output cells state what the INTENDED design should produce for
   those inputs (course semantics, e.g. RV32I). If the circuit disagrees,

@@ -749,15 +749,18 @@ def debug_circuit(dig_path: str, *, spec_name: str | None = None,
     verify_seconds: list[float] = []
     refuted_total = 0
     stopped_early = False
+    limit_msg: str | None = None      # the course server's daily-budget stop
 
     def ask(prompt_text: str) -> dict:
-        nonlocal calls
+        nonlocal calls, limit_msg
         t0 = time.monotonic()
         r = call(prompt_text, api_key=api_key, model=model,
                  max_tokens=_max_tokens_for(model),
                  effort=_effort_for(model), feature="modeA")
         llm_seconds.append(round(time.monotonic() - t0, 2))
         calls += 1
+        if r.get("limit_hit"):
+            limit_msg = r.get("error") or "Daily limit reached."
         u = r.get("usage") or {}
         usage["input_tokens"] += u.get("input_tokens") or 0
         usage["output_tokens"] += u.get("output_tokens") or 0
@@ -1124,4 +1127,5 @@ def debug_circuit(dig_path: str, *, spec_name: str | None = None,
             "timings": {"llm_s": llm_seconds, "verify_s": verify_seconds,
                         "total_s": round(time.monotonic() - t_begin, 2)},
             "verify_runner": "digital" if jar else "evaluator",
+            "limit_hit": limit_msg is not None, "limit_message": limit_msg,
             "usage": usage, "llm_calls": calls}

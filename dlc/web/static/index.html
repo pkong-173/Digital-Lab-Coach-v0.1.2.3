@@ -176,6 +176,7 @@
               <span id="goal-count" class="muted">0 / 500 characters</span>
               <button id="l2-llm-btn" class="btn">Summarize circuit</button>
               <button id="l2-stop-btn" class="btn-ghost" disabled>Stop</button>
+              <span id="l2-llm-limit" class="l3-chip l3-chip-warn l3-limit-chip hidden"></span>
             </div>
             <div id="l2-llm-status" class="muted l2-llm-status"></div>
             <div id="l2-llm-output" class="l2-output"></div>
@@ -226,6 +227,7 @@
                         title="Explains WHY rows fail: clusters the failing rows, hypothesizes the bug, verifies the fix on a temp copy, then plays the diagnosis back on the circuit.">
                   Analyze failing rows
                 </button>
+                <span id="l3-a-limit" class="l3-chip l3-chip-warn l3-limit-chip hidden"></span>
                 <select id="l3-a-model" class="l3-model-pick"
                         title="Which model runs the analysis. Sonnet is the fast default; Opus is stronger on hard bugs (control logic, multi-cause) and costs more per run.">
                   <option value="" selected>model: Sonnet 4.6 (default)</option>
@@ -247,6 +249,7 @@
                         title="Checks the whole tree's testcases: flags rows that assert the wrong value and proposes non-redundant new rows, verified on a temp copy.">
                   Check my test coverage
                 </button>
+                <span id="l3-b-limit" class="l3-chip l3-chip-warn l3-limit-chip hidden"></span>
                 <select id="l3-b-model" class="l3-model-pick"
                         title="Which model proposes the new test rows. Sonnet is the fast default; Opus is stronger on subtle coverage gaps and costs more per run.">
                   <option value="" selected>model: Sonnet 4.6 (default)</option>

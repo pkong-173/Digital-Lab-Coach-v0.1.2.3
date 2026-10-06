@@ -144,18 +144,46 @@ def _find_spec(circuit, spec_name: str) -> TestSpec:
     raise ValueError(f"No testcase named {spec_name!r} in this circuit; saw: {names}")
 
 
+def _parse_text_beside(src_path: Path, text: str):
+    """Parse circuit XML held in memory. The file is written next to the
+    original for the moment of parsing, so subcircuit references resolve
+    exactly as they do for the original."""
+    fd, tmp = tempfile.mkstemp(
+        suffix=".dig", prefix=_TEMP_PREFIX, dir=str(src_path.parent),
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        return parse_dig_file(tmp)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 def write_temp_with_rows(
     dig_path: str,
     spec_name: str,
     rows: list[InjectedRow],
+    headers: list[str] | None = None,
 ) -> tuple[str, TestSpec]:
     src_path = Path(dig_path)
+    source_text = src_path.read_text(encoding="utf-8")
     circuit = parse_dig_file(str(src_path))
-    spec = _find_spec(circuit, spec_name)
+    spec = next((s for s in extract_test_specs(circuit)
+                 if s.name == spec_name), None)
+    if spec is None and headers:
+        source_text = add_testcase_text(source_text, spec_name,
+                                        " ".join(headers))
+        circuit = _parse_text_beside(src_path, source_text)
+        spec = next((s for s in extract_test_specs(circuit)
+                     if s.name == spec_name), None)
+    if spec is None:
+        spec = _find_spec(circuit, spec_name)      # raises the usual message
     validate_rows(spec, rows)
     ordinal = _datastring_ordinal(circuit, spec)
 
-    source_text = src_path.read_text(encoding="utf-8")
     new_text = inject_rows_text(source_text, ordinal, rows)
 
     fd, temp_path = tempfile.mkstemp(
@@ -535,6 +563,7 @@ def rerun_with_rows(
     jar_path: str | None = None,
     timeout: float = 60.0,
     keep_temp: bool = False,
+    headers: list[str] | None = None,
 ) -> InjectionOutcome:
     jar = jar_path or find_digital_jar()
     if jar is None:
@@ -547,7 +576,8 @@ def rerun_with_rows(
         )
 
     try:
-        temp_path, original_spec = write_temp_with_rows(dig_path, spec_name, rows)
+        temp_path, original_spec = write_temp_with_rows(
+            dig_path, spec_name, rows, headers=headers)
     except ValueError as exc:
         return InjectionOutcome(ok=False, warning=str(exc))
 

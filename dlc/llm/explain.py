@@ -315,4 +315,8 @@ def explain_circuit(
         "error": result["error"],
         "usage": result["usage"],
         "model": result["model"],
+        # course-server daily budget, so the page can tell a limit from
+        # any other failure and gray the button out instead of wiping
+        "limit_hit": bool(result.get("limit_hit")),
+        "capacity_hit": bool(result.get("capacity_hit")),
     }

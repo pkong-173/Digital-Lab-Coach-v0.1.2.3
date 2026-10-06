@@ -141,6 +141,8 @@
 .l3-chip-bad  { background: #fee2e2; color: #991b1b; }
 .l3-chip-warn { background: #fef3c7; color: #92400e; }
 .l3-chip-none { background: #f1f5f9; color: #64748b; }
+.l3-limit-chip { cursor: help; white-space: nowrap; }
+.l3-limit-chip.hidden { display: none; }
 
 .l3-flag {
   border-left: 3px solid #dc2626;

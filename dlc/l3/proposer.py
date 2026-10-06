@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from dlc.l3.coverage import TreeCoverageReport, scan_tree_coverage
+from dlc.l3.coverage import (
+    SYNTHETIC_SPEC_NAME, TreeCoverageReport, scan_tree_coverage,
+)
 from dlc.l3.oracle import InjectedRow, validate_rows
 from dlc.llm.client import DEFAULT_MODEL, call_llm
 from dlc.llm.jsonish import extract_json_object
@@ -42,25 +44,33 @@ def _load_prompt() -> str:
 def build_targets(report: TreeCoverageReport) -> list[dict]:
     targets: list[dict] = []
     for cov in report.circuits:
-        if not cov.has_testcases or not cov.path:
+        if not cov.path:
             continue
         try:
             circuit = parse_dig_file(cov.path)
             specs = extract_test_specs(circuit)
         except Exception:
             continue
-        if not specs:
+        spec = specs[0] if specs else None
+        synthetic = spec is None or not spec.headers
+        if synthetic and not cov.synthetic_headers:
             continue
-        spec = specs[0]
-        existing = [r.raw.strip() for r in spec.rows if not r.is_malformed]
+        if synthetic:
+            headers = list(cov.synthetic_headers)
+            spec_name = SYNTHETIC_SPEC_NAME
+            existing: list[str] = []
+        else:
+            headers = list(spec.headers)
+            spec_name = spec.name
+            existing = [r.raw.strip() for r in spec.rows if not r.is_malformed]
         shown = existing[:_MAX_EXISTING_ROWS_SHOWN]
-        bindings = match_variables_to_io(spec.headers, circuit)
+        bindings = match_variables_to_io(headers, circuit)
         clock_col = next((col for col, b in bindings.items()
                           if b is not None and b.role == "clock"), None)
         target = {
             "file": cov.file,
-            "spec_name": spec.name,
-            "headers": list(spec.headers),
+            "spec_name": spec_name,
+            "headers": headers,
             "inputs": [{"label": c.label, "bits": c.bit_width()}
                        for c in circuit.inputs() if c.label],
             "outputs": [{"label": c.label, "bits": c.bit_width()}
@@ -71,7 +81,11 @@ def build_targets(report: TreeCoverageReport) -> list[dict]:
             "clock_col": clock_col,
             "has_program_rom": False,
         }
-        rom = _program_rom_of(circuit)
+        if synthetic:
+            target["synthetic"] = True
+            target["note"] = ("this circuit has no testcase yet: no example "
+                              "rows, the coach proposes the first set")
+        rom = _program_rom_of(circuit) if not synthetic else None
         if rom is not None:
             words, addr_bits = rom
             target["has_program_rom"] = True
@@ -219,7 +233,11 @@ def validate_and_dedupe(
             good_rows.append(raw)
         if good_rows:
             total += len(good_rows)
-            valid.append({**p, "rows": good_rows})
+            entry = {**p, "rows": good_rows}
+            if t.get("synthetic"):
+                entry["synthetic"] = True
+                entry["headers"] = list(t["headers"])
+            valid.append(entry)
         for raw, reason in bad:
             rejected.append({"file": p["file"], "spec_name": p["spec_name"],
                              "rows": [raw], "why": p.get("why", ""),
@@ -415,10 +433,11 @@ def propose_rows(
     model: str | None = None,
     api_key: str | None = None,
     call=None,
+    display: str | None = None,
 ) -> dict:
     if call is None:
         call = call_llm
-    report = scan_tree_coverage(dig_path)
+    report = scan_tree_coverage(dig_path, display=display)
     if report.total_flags > 0:
         return {"ok": False, "proposals": [], "rejected": [],
                 "model": None,
@@ -444,7 +463,9 @@ def propose_rows(
     if not targets:
         return {"ok": False, "proposals": [], "rejected": [],
                 "model": None,
-                "error": "No testcase anywhere in this tree to extend.",
+                "error": ("No testcase anywhere in this tree to extend, and "
+                          "the top circuit has no labelled In and Out pins "
+                          "the coach could build one from."),
                 "notes": []}
 
     from dlc.l3 import manifest as mf
@@ -475,6 +496,8 @@ def propose_rows(
         return {"ok": False, "proposals": [], "rejected": [],
                 "model": used_model,
                 "error": resp.get("error") or "Model call failed.",
+                "limit_hit": bool(resp.get("limit_hit")),
+                "capacity_hit": bool(resp.get("capacity_hit")),
                 "notes": []}
 
     proposals = parse_proposals(resp.get("text") or "")
@@ -765,6 +788,9 @@ def _replay_gate(valid, rejected, notes, targets, paths):
         splice = ({"insert_at": g["insert_at"],
                    "insert_before_row": g.get("insert_before_row")}
                   if g.get("insert_at") is not None else {})
+        if t.get("synthetic"):
+            # no testcase in the file: replay from reset with these headers
+            splice["headers"] = list(t["headers"])
         prior = ([] if g.get("program_words")
                  else list(ahead.get(g["file"], [])))
         run_rows = prior + list(g["rows"])

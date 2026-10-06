@@ -51,6 +51,47 @@ function l3PageVisible() {
   return !!page && !page.hasAttribute("hidden");
 }
 
+  /*# ───────────────────────────────────────────────────────────────────
+  *#  Daily limits on the boards. The state lives in app.js's llmBudget,
+  *#  OUTSIDE l3Store: slots expire on re-upload, the day's caps do not.
+  *#  A reached limit grays the run button out (reason on hover, chip
+  *#  beside it) and leaves the board's results where they are.
+  *# ──────────────────────────────────────────────────────────────────#*/
+function l3LimitInfo(mode) {           // "modeA" | "modeB"
+  const local = (typeof llmBudget !== "undefined" && llmBudget.local) || null;
+  if (local && local.enforced && local.caps && local.caps[mode] != null) {
+    const used = (local.used && local.used[mode]) || 0;
+    const cap = local.caps[mode];
+    if (used >= cap) {
+      const what = mode === "modeA" ? "failed-test analyses" : "Coverage Coach scans";
+      return {
+        hit: true, local: true,
+        title: `Daily limit reached: ${used}/${cap} ${what} used today on ` +
+               `this computer — it resets tomorrow. What is already shown stays.`,
+        chip: `limit reached · ${used}/${cap} today`,
+      };
+    }
+  }
+  const p = (typeof proxyLimitInfo === "function")
+    ? proxyLimitInfo(mode) : { hit: false, title: "" };
+  if (p.hit) return { hit: true, local: false, title: p.title, chip: "limit reached · course server" };
+  return { hit: false, local: false, title: "", chip: "" };
+}
+
+function l3OnLimitsChanged() {
+  if (l3PageVisible() && loaded.length > 0) renderL3Boards(loaded[currentIdx]);
+}
+
+function l3NoteLimits(body, mode) {
+  if (typeof llmBudget === "undefined" || !body) return;
+  if (body.limits) llmBudget.local = body.limits;
+  if (body.limited && body.proxy_limit) {
+    llmBudget.proxy[mode] = { hit: true, capacity: false,
+                              message: body.warning || null };
+  }
+  if (typeof refreshLlmLimits === "function") refreshLlmLimits();
+}
+
 function l3ResetDom() {
   try { if (typeof _l3ClearFixMarks === "function") _l3ClearFixMarks(); } catch {}
   for (const id of ["l3-diag-board", "l3-retest-box",
@@ -273,7 +314,16 @@ function _l3PaintBoard(which, state) {
   status.textContent = state.status;
   status.className = "l3-status " + (state.cls || "muted");
   body.innerHTML = state.bodyHtml || "";
-  btn.disabled = !state.enabled;
+  const lim = l3LimitInfo(which === "a" ? "modeA" : "modeB");
+  if (btn.dataset.defaultTitle == null) btn.dataset.defaultTitle = btn.title || "";
+  btn.disabled = !state.enabled || lim.hit;
+  btn.title = lim.hit ? lim.title : btn.dataset.defaultTitle;
+  const chip = document.getElementById(`l3-${which}-limit`);
+  if (chip) {
+    chip.textContent = lim.chip;
+    chip.title = lim.title;
+    chip.classList.toggle("hidden", !lim.hit);
+  }
 }
 
 function renderL3Boards(file) {
@@ -350,7 +400,8 @@ function renderL3Boards(file) {
     });
   } else if (!file.summary || !file.summary.has_testcases) {
     _l3PaintBoard("a", {
-      status: "This file has no testcases, so there are no failing rows to analyze." + coachHint,
+      status: "This file has no testcases, so there are no failing rows to " +
+        "analyze. The Coverage Coach below can propose a first set." + coachHint,
       cls: "muted",
       bodyHtml: l3ModeABodyHtml(ma),
     });
@@ -405,6 +456,11 @@ function renderL3Boards(file) {
                "are never tested" +
                "This scan was free.";
       cls = "blocked";
+    } else if (l3SyntheticRoot(rep) && !mb.proposals && !mb.inject) {
+      status = "Scan done: this file has no test rows yet — the coach can " +
+               "propose a first set below. Coverage notes list what a first " +
+               "testcase should cover.";
+      cls = "ready";
     } else {
       status = "Scan done: tests and circuit agree everywhere. " +
                "Coverage notes below.";
@@ -666,8 +722,6 @@ function _l3FailingRowsTable(res) {
   body.addEventListener("click", (evt) => {
     const rr = evt.target.closest("[data-l3a-rerun]");
     if (rr) {
-      const file = loaded.length > 0 ? loaded[currentIdx] : null;
-      if (file) l3Slot(file.filename).modeA = null;
       logEvent("l3_modeA_rerun_clicked", {});
       l3RunModeA();
       return;
@@ -826,6 +880,13 @@ function _l3SelectGateHtml(mb) {
     `guess could lock in the exact bug it is meant to catch.</div></div>`;
 }
 
+function l3SyntheticRoot(rep) {
+  const root = rep && (rep.circuits || [])[0];
+  if (!root || root.row_count) return null;
+  const h = root.synthetic_headers || [];
+  return h.length ? h : null;
+}
+
 function l3ProposalsHtml(mb) {
   if (!mb.report || mb.report.total_flags > 0 || mb.locked
       || (mb.report.select_gate || []).length) return "";
@@ -833,19 +894,31 @@ function l3ProposalsHtml(mb) {
     return `<div class="l3-note-card">Asking the coach for new rows<span
       class="l3-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span></div>`;
   }
+  const pl = (typeof proxyLimitInfo === "function")
+    ? proxyLimitInfo("modeB") : { hit: false, title: "" };
+  const gate = pl.hit ? ` disabled title="${escapeHtml(pl.title)}"` : "";
+  const limChip = pl.hit
+    ? `<span class="l3-chip l3-chip-warn l3-limit-chip" title="${escapeHtml(pl.title)}">limit reached · course server</span>`
+    : "";
   if (!mb.proposals) {
-    return `<div class="l3-prop-bar">
-      <button class="btn" data-l3-act="propose">Propose new test rows</button>
+    const synth = l3SyntheticRoot(mb.report);
+    const first = synth
+      ? `<div class="l3-note-card">This file has no test rows yet. The coach can propose a
+         first set for the columns <code>${escapeHtml(synth.join(" "))}</code> and verify
+         them on a temp copy that gets the testcase — your file stays untouched.</div>`
+      : "";
+    return first + `<div class="l3-prop-bar">
+      <button class="btn" data-l3-act="propose"${gate}>${synth ? "Propose a first set of test rows" : "Propose new test rows"}</button>${limChip}
     </div>`;
   }
   const p = mb.proposals;
   if (p.error) {
-    return `<div class="l3-note-card">Proposer unavailable: ${escapeHtml(p.error)}</div>` +
-      `<div class="l3-prop-bar"><button class="btn" data-l3-act="propose">Try again</button></div>`;
+    return `<div class="l3-note-card">${p.limit_hit ? "" : "Proposer unavailable: "}${escapeHtml(p.error)}</div>` +
+      `<div class="l3-prop-bar"><button class="btn" data-l3-act="propose"${gate}>Try again</button>${limChip}</div>`;
   }
   if (!p.proposals.length) {
     const retry = p.all_categories_covered ? "" :
-      `<div class="l3-prop-bar"><button class="btn" data-l3-act="propose">Try again</button></div>`;
+      `<div class="l3-prop-bar"><button class="btn" data-l3-act="propose"${gate}>Try again</button>${limChip}</div>`;
     return `<div class="l3-note-card">${escapeHtml((p.notes || []).join(" ") ||
       "No usable proposals this time.")}</div>` + retry;
   }
@@ -1031,10 +1104,13 @@ function l3InjectHtml(mb) {
         ? `<div class="l3-prop-bar"><button class="btn-ghost" data-l3-act="copyrows" data-l3-file="${escapeHtml(file)}">Copy the coach rows</button>
            ${out.rom_program ? `<button class="btn-ghost" data-l3-act="copyrom" data-l3-file="${escapeHtml(file)}">Copy the full ROM program</button>` : ""}
            <span class="l3-prop-hint">These rows live on the coach's TEMP copy —
-           <b>your ${escapeHtml(file)} is unchanged</b>. To keep them, paste
-           them into your testcase in Digital${out.rom_program
-             ? " and replace the Instruction Memory Data with the full ROM program"
-             : ""}.</span></div>`
+           <b>your ${escapeHtml(file)} is unchanged</b>. ${out._synthetic
+             ? `Your file has no testcase: to keep them, add a Testcase element in
+                Digital (Components &rarr; Misc.), open it and paste the header line
+                <code>${escapeHtml((out.headers || []).join(" "))}</code> with the rows under it.`
+             : `To keep them, paste them into your testcase in Digital${out.rom_program
+               ? " and replace the Instruction Memory Data with the full ROM program"
+               : ""}.`}</span></div>`
         : ""}
       ${out.outcome === "all_set" && (out.rows || []).some((r) => r.added)
         ? (out._adopted
@@ -1082,10 +1158,12 @@ async function l3ProposeClick() {
   slot.modeB.proposals = body.ok
     ? body
     : { proposals: [], notes: body.notes || [], model: body.model,
-        error: body.error };
+        error: body.error, limit_hit: !!body.limit_hit };
   if (body.limits && slot.modeB.report) {
     slot.modeB.report.limits = body.limits;
   }
+  if (typeof noteProxyLimit === "function") noteProxyLimit("modeB", body);
+  l3NoteLimits(body, "modeB");
   logEvent("l3_modeB_proposed", {
     filename: file.filename, ok: !!body.ok,
     n_rows: (body.proposals || []).reduce((n, g) => n + g.rows.length, 0),
@@ -1139,6 +1217,7 @@ async function l3AcceptClick() {
           insert_before_row: g.insert_before_row ?? null,
           pc_shift: g.pc_shift || 0,
           pc_col: g.pc_col || null,
+          ...(g.synthetic && g.headers ? { headers: g.headers } : {}),
         }),
       });
       out = res.ok ? await res.json()
@@ -1148,6 +1227,7 @@ async function l3AcceptClick() {
     }
     let shape = null;
     if (out.ok) {
+      out._synthetic = !!g.synthetic;
       const cov = (mb.report.circuits || []).find((c) => c.file === g.file);
       const sp = cov && (cov.specs || []).find((s) => s.name === g.spec_name);
       out._spec_index = (out.spec_index != null)
@@ -1369,6 +1449,9 @@ async function l3CopyRows(file, btn) {
     lines.push(out._rom_words.join(","));
     lines.push(`# test rows (append to the END of your '${out.spec_name || ""}' testcase):`);
   }
+  if (out._synthetic && (out.headers || []).length) {
+    lines.push(out.headers.join(" "));
+  }
   for (const r of out.rows || []) {
     if (r.added && r.raw) lines.push(r.raw);
   }
@@ -1475,6 +1558,7 @@ async function l3DiscardFail(file) {
         body: JSON.stringify({
           session_id: sessionId, filename: file,
           spec_name: out.spec_name, rows: keep,
+          ...(out._synthetic && out.headers ? { headers: out.headers } : {}),
         }),
       });
       body = res.ok ? await res.json()
@@ -1482,7 +1566,7 @@ async function l3DiscardFail(file) {
     } catch (err) {
       body = { ok: false, warning: `Network error: ${err}` };
     }
-    if (body.ok) body._spec_index = out._spec_index;
+    if (body.ok) { body._spec_index = out._spec_index; body._synthetic = out._synthetic; }
     mb.inject[file] = body;
     mb.accepting = false;
     l3RunState.b = false;
@@ -1559,12 +1643,24 @@ async function l3RunModeA() {
 
   if (body && body.ok) {
     l3Slot(filename).modeA = { result: body, levels: {} };
+    l3NoteLimits(body, "modeA");
     logEvent("l3_modeA_run_complete", {
       filename, mode: body.mode,
       cards: (body.cards || []).length, llm_calls: body.llm_calls || 0,
     });
     if ((body.cards || []).length && typeof dlcMaybeAskFeedback === "function") {
       dlcMaybeAskFeedback("modeA", filename);
+    }
+  } else if (body && body.limited) {
+    l3NoteLimits(body, "modeA");
+    logEvent("l3_modeA_run_complete", { filename, ok: false, limited: true });
+    const status = document.getElementById("l3-a-status");
+    if (status && l3PageVisible()
+        && loaded[currentIdx] && loaded[currentIdx].filename === filename) {
+      renderL3Boards(loaded[currentIdx]);
+      status.textContent = body.warning || "Daily limit reached — try again tomorrow.";
+      status.className = "l3-status blocked";
+      return;
     }
   } else {
     const warn = failText || (body && (body.warning || body.error))
@@ -1616,10 +1712,22 @@ l3BRunBtn.addEventListener("click", async () => {
 
   if (body && body.ok) {
     l3Slot(filename).modeB = { report: body };
+    l3NoteLimits(body, "modeB");
     logEvent("l3_modeB_run_complete", {
       filename, ok: true, total_flags: body.total_flags || 0,
       select_gate: (body.select_gate || []).length,
     });
+  } else if (body && body.limited) {
+    l3NoteLimits(body, "modeB");
+    logEvent("l3_modeB_run_complete", { filename, ok: false, limited: true });
+    const status = document.getElementById("l3-b-status");
+    if (status && l3PageVisible()
+        && loaded[currentIdx] && loaded[currentIdx].filename === filename) {
+      renderL3Boards(loaded[currentIdx]);
+      status.textContent = body.warning || "Daily limit reached — try again tomorrow.";
+      status.className = "l3-status blocked";
+      return;
+    }
   } else {
     const warn = failText || (body && body.warning) || "Scan failed.";
     l3Slot(filename).modeB = null;

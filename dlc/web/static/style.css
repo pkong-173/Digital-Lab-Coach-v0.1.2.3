@@ -87,6 +87,8 @@ header h1 {
   font-size: 13px;
 }
 .btn:hover { background: var(--accent-hover); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn:disabled:hover { background: var(--accent); }
 
 .btn-ghost {
   background: var(--ghost);
@@ -1205,7 +1207,11 @@ main {
   align-items: center;
   justify-content: space-between;
   margin-top: 8px;
+  flex-wrap: wrap;
+  row-gap: 4px;
 }
+#l2-llm-btn { white-space: nowrap; }
+.goal-row .l3-limit-chip { margin-left: auto; }
 
 .l2-llm-status { margin-top: 10px; font-size: 12.5px; }
 .l2-llm-status.running { color: #92400e; }

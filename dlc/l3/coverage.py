@@ -101,6 +101,36 @@ class CircuitCoverage:
     categories_touched: list[str] = field(default_factory=list)
     categories_missing: list[str] = field(default_factory=list)
     official_test: str | None = None
+    synthetic_headers: list[str] = field(default_factory=list)
+
+
+SYNTHETIC_SPEC_NAME = "coach"
+
+
+def synthetic_headers_for(circuit: Circuit) -> list[str]:
+    ins: list[str] = []
+    clocks: list[str] = []
+    outs: list[str] = []
+    for comp in circuit.components:
+        lbl = comp.label
+        if not lbl or lbl in ins or lbl in clocks or lbl in outs:
+            continue
+        if comp.is_input():
+            ins.append(lbl)
+        elif comp.is_output():
+            outs.append(lbl)
+        elif comp.element_name == "Clock":
+            clocks.append(lbl)
+    if not ins or not outs:
+        return []
+    return ins + clocks + outs
+
+
+def header_only_spec(headers: list[str], name: str = SYNTHETIC_SPEC_NAME):
+    from dlc.testing.spec import TestSpec
+    return TestSpec(name=name, component_index=-1, headers=list(headers),
+                    rows=[], raw_data_string=" ".join(headers),
+                    has_unexpanded_loops=False)
 
 
 @dataclass
@@ -278,7 +308,7 @@ def _sel_input_labels(circuit: Circuit, netlist) -> dict[int, str]:
 
 
 # ---------------------------------------------------------------------------
-# Per-circuit scan (2.1 + 2.2 in one replay pass)
+# Per-circuit scan
 # ---------------------------------------------------------------------------
 
 def scan_circuit_coverage(
@@ -286,8 +316,8 @@ def scan_circuit_coverage(
     *,
     display: str = "circuit",
     path: str | None = None,
+    synthesize: bool = False,
 ) -> CircuitCoverage:
-    """Scan ONE circuit (as its own top level) against its own testcases."""
     cov = CircuitCoverage(file=display, path=path)
     netlist = build_netlist(circuit)
     graph = build_signal_graph(circuit, netlist)
@@ -314,6 +344,16 @@ def scan_circuit_coverage(
             "This circuit has no embedded testcase — nothing here is "
             "tested directly."
         )
+    if synthesize and not any(s.headers for s in specs):
+        cov.synthetic_headers = synthetic_headers_for(circuit)
+        if cov.synthetic_headers:
+            for h in cov.synthetic_headers:
+                if h in in_driven:
+                    in_driven[h] = True
+            cov.notes.append(
+                "no test rows yet — the Coverage Coach can propose a first "
+                f"set (columns: {' '.join(cov.synthetic_headers)})."
+            )
 
     for spec_index, spec in enumerate(specs):
         scan = SpecScan(
@@ -451,7 +491,7 @@ def scan_circuit_coverage(
 
 
 def _build_notes(cov: CircuitCoverage) -> None:
-    if not cov.has_testcases:
+    if not cov.has_testcases and not cov.synthetic_headers:
         return
     for ic in cov.inputs:
         if not ic.in_testcases:
@@ -501,11 +541,13 @@ def _build_notes(cov: CircuitCoverage) -> None:
             f"vectors tested."
         )
 
-def _collect_tree(circuit: Circuit, root_path: str) -> list[tuple[str, str, Circuit]]:
+def _collect_tree(circuit: Circuit, root_path: str,
+                  root_display: str | None = None) -> list[tuple[str, str, Circuit]]:
     seen: set[str] = set()
     out: list[tuple[str, str, Circuit]] = []
     queue: list[tuple[str, str, Circuit]] = [
-        (os.path.basename(root_path), os.path.abspath(root_path), circuit)
+        (root_display or os.path.basename(root_path),
+         os.path.abspath(root_path), circuit)
     ]
     while queue:
         display, path, circ = queue.pop(0)
@@ -531,6 +573,7 @@ def replay_appended_rows(
     rom_words: list[str] | None = None,
     insert_at: int | None = None,
     insert_before_row: int | None = None,
+    headers: list[str] | None = None,
 ) -> list[dict]:
     tmp = None
     try:
@@ -548,8 +591,12 @@ def replay_appended_rows(
             circuit = parse_dig_file(str(path))
         netlist = build_netlist(circuit)
         graph = build_signal_graph(circuit, netlist)
-        spec = next(s for s in extract_test_specs(circuit)
-                    if s.name == spec_name)
+        spec = next((s for s in extract_test_specs(circuit)
+                     if s.name == spec_name), None)
+        if spec is None:
+            if not headers:
+                raise ValueError(f"No testcase named {spec_name!r}.")
+            spec = header_only_spec(headers, name=spec_name)
         bindings = match_variables_to_io(spec.headers, circuit)
 
         reg_state: dict = {}
@@ -620,8 +667,11 @@ def replay_appended_rows(
                 pass
 
 
-def scan_tree_coverage(dig_path: str) -> TreeCoverageReport:
-    report = TreeCoverageReport(root=os.path.basename(dig_path))
+def scan_tree_coverage(dig_path: str,
+                       display: str | None = None) -> TreeCoverageReport:
+    """`display` names the root in the report when `dig_path` is a temp
+    copy standing in for the student's file (official-test injection)."""
+    report = TreeCoverageReport(root=display or os.path.basename(dig_path))
     try:
         circuit = parse_dig_file(str(dig_path))
     except Exception as exc:
@@ -630,9 +680,11 @@ def scan_tree_coverage(dig_path: str) -> TreeCoverageReport:
 
     unresolved: set[str] = set()
     kinds: set[str] = set()
-    for display, path, circ in _collect_tree(circuit, str(dig_path)):
+    for i, (disp, path, circ) in enumerate(
+            _collect_tree(circuit, str(dig_path), root_display=display)):
         report.circuits.append(
-            scan_circuit_coverage(circ, display=display, path=path)
+            scan_circuit_coverage(circ, display=disp, path=path,
+                                  synthesize=(i == 0))
         )
         kinds |= {comp.element_name for comp in circ.components}
         for sub in circ.subcircuits:
@@ -687,16 +739,24 @@ def _apply_manifest(report: TreeCoverageReport) -> None:
         report.notes.append(
             f"lab manifest '{m.get('lab', '?')}'{src} applied{how}.")
     for cov in report.circuits:
-        if not cov.has_testcases or not cov.path:
+        if not cov.path or not (cov.has_testcases or cov.synthetic_headers):
             continue
         try:
             circuit = parse_dig_file(cov.path)
-            spec = extract_test_specs(circuit)[0]
+            specs = extract_test_specs(circuit)
         except Exception:
             continue
-        cov.official_test = mf.official_status(
-            m, cov.file, spec.raw_data_string,
-        )
+        spec = specs[0] if specs else None
+        synthetic = False
+        if (spec is None or not spec.headers) and cov.synthetic_headers:
+            spec = header_only_spec(cov.synthetic_headers)
+            synthetic = True
+        if spec is None:
+            continue
+        if not synthetic:
+            cov.official_test = mf.official_status(
+                m, cov.file, spec.raw_data_string,
+            )
         if not m:
             if cov.official_test == "official" and cov.flags:
                 for f in cov.flags:

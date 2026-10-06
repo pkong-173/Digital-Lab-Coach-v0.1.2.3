@@ -65,11 +65,22 @@ class CoverageRequest(BaseModel):
     filename: str
 
 
+def _official_base(path: str, filename: str) -> tuple[str | None, list[str]]:
+    from dlc.testing.inject import file_test_status, prepare_injected_run
+    try:
+        if file_test_status(parse_dig_file(path), filename) != "missing":
+            return None, []
+    except Exception:
+        return None, []
+    return prepare_injected_run(path, filename)
+
+
 @router.post("/api/l3/coverage")
 def l3_coverage(req: CoverageRequest) -> dict:
     """
     Mode B's deterministic pass
     """
+    from dlc.testing.inject import cleanup_injected
     from dlc.web import server
 
     target = server._resolve_target(req.session_id, req.filename)
@@ -92,13 +103,21 @@ def l3_coverage(req: CoverageRequest) -> dict:
             "warning": "Daily Coverage Coach limit reached — try again tomorrow.",
             "limits": limits.state(),
         }
+    inj_temp, inj_notes = (None, []) if on_temp else _official_base(
+        scan_path, req.filename)
     try:
-        report = scan_tree_coverage(scan_path)
+        report = scan_tree_coverage(
+            inj_temp or scan_path,
+            display=os.path.basename(scan_path) if inj_temp else None)
     except Exception as exc:
         return {
             "ok": False,
             "warning": f"Coverage scan failed: {type(exc).__name__}: {exc}",
         }
+    finally:
+        cleanup_injected(inj_temp)
+    if inj_notes:
+        report.notes.extend(inj_notes)
     consumed = report.total_flags == 0 and not report.select_gate
     lim = limits.consume("modeB") if consumed else limits.state()
     if consumed:
@@ -111,6 +130,7 @@ def l3_coverage(req: CoverageRequest) -> dict:
         "consumed_use": consumed,
         "limits": lim,
         "on_coach_temp": on_temp,
+        "injected": inj_notes,
         **report.to_dict(),
     }
 
@@ -124,26 +144,35 @@ class ProposeRequest(BaseModel):
 @router.post("/api/l3/propose")
 def l3_propose(req: ProposeRequest) -> dict:
     from dlc.l3 import proposer
+    from dlc.testing.inject import cleanup_injected
     from dlc.web import server
 
     target = server._resolve_target(req.session_id, req.filename)
-    prop_path = target["path"]
+    prop_path, on_temp = target["path"], False
     _s = server._SESSIONS.get(req.session_id)
     _lt = (_s or {}).get("l3_temp") or None
     if (_lt and _lt.get("for") == req.filename and _lt.get("path")
             and os.path.exists(_lt["path"])):
-        prop_path = _lt["path"]
+        prop_path, on_temp = _lt["path"], True
     guard = _transistor_guard(prop_path)
     if guard is not None:
         _log_modeB_result(req.session_id, req.filename,
                           {"mode": "unsupported"})
         return {**guard, "proposals": [], "rejected": [], "notes": []}
+    inj_temp, inj_notes = (None, []) if on_temp else _official_base(
+        prop_path, req.filename)
     try:
-        result = proposer.propose_rows(prop_path, model=req.model)
+        result = proposer.propose_rows(
+            inj_temp or prop_path, model=req.model,
+            display=os.path.basename(prop_path) if inj_temp else None)
     except Exception as exc:
         result = {"ok": False, "proposals": [], "rejected": [],
                   "model": req.model, "notes": [],
                   "error": f"Proposer failed: {type(exc).__name__}: {exc}"}
+    finally:
+        cleanup_injected(inj_temp)
+    if inj_notes:
+        result["injected"] = inj_notes
     session = server._SESSIONS.get(req.session_id)
     refundable = (session is not None
                   and req.filename in session.get("l3_refundable", set()))
@@ -206,55 +235,71 @@ class InjectRequest(BaseModel):
     insert_before_row: int | None = None
     pc_shift: int = 0
     pc_col: str | None = None
+    headers: list[str] | None = None
 
 
 @router.post("/api/l3/inject")
 def l3_inject(req: InjectRequest) -> dict:
     """Mode B's accept-flow"""
+    from dlc.l3.coverage import SYNTHETIC_SPEC_NAME
+    from dlc.testing.inject import cleanup_injected
     from dlc.web import server
 
     target = server._resolve_target(req.session_id, req.filename)
-    base_path = target["path"]
+    base_path, on_temp = target["path"], False
     _s = server._SESSIONS.get(req.session_id)
     _lt = (_s or {}).get("l3_temp") or None
     prev_coach_rows: list[int] = []
     if (_lt and _lt.get("for") == req.filename and _lt.get("path")
             and os.path.exists(_lt["path"])):
-        base_path = _lt["path"]
+        base_path, on_temp = _lt["path"], True
         prev_coach_rows = list(_lt.get("coach_rows") or [])
+    inj_temp, inj_notes = (None, []) if on_temp else _official_base(
+        base_path, req.filename)
+    if inj_temp:
+        base_path = inj_temp
 
-    spec_name = req.spec_name
-    if spec_name is None:
-        try:
-            specs = extract_test_specs(parse_dig_file(base_path))
-        except Exception as exc:
-            return {"ok": False, "outcome": "error",
-                    "warning": f"Could not parse circuit: {exc}"}
-        if not specs:
-            return {"ok": False, "outcome": "error",
-                    "warning": "This file has no testcase to inject into."}
-        spec_name = specs[0].name
+    try:
+        spec_name = req.spec_name
+        if spec_name is None:
+            try:
+                specs = extract_test_specs(parse_dig_file(base_path))
+            except Exception as exc:
+                return {"ok": False, "outcome": "error",
+                        "warning": f"Could not parse circuit: {exc}"}
+            if specs:
+                spec_name = specs[0].name
+            elif req.headers:
+                spec_name = SYNTHETIC_SPEC_NAME
+            else:
+                return {"ok": False, "outcome": "error",
+                        "warning": "This file has no testcase to inject into."}
 
-    rows = [InjectedRow(raw=r, origin=req.origin or "coach")
-            for r in req.rows if isinstance(r, str)]
-    if req.as_second:
-        outcome = rerun_with_second(
-            base_path, spec_name, rows, req.rom_words, keep_temp=True,
-        )
-    elif req.rom_words:
-        splice = ({"insert_at": req.insert_at,
-                   "insert_before_row": req.insert_before_row,
-                   "pc_shift": req.pc_shift, "pc_col": req.pc_col}
-                  if req.insert_at is not None else {})
-        outcome = rerun_with_program(
-            base_path, spec_name, rows, req.rom_words, keep_temp=True,
-            **splice,
-        )
-    else:
-        outcome = rerun_with_rows(
-            base_path, spec_name, rows, keep_temp=True,
-        )
+        rows = [InjectedRow(raw=r, origin=req.origin or "coach")
+                for r in req.rows if isinstance(r, str)]
+        if req.as_second:
+            outcome = rerun_with_second(
+                base_path, spec_name, rows, req.rom_words, keep_temp=True,
+            )
+        elif req.rom_words:
+            splice = ({"insert_at": req.insert_at,
+                       "insert_before_row": req.insert_before_row,
+                       "pc_shift": req.pc_shift, "pc_col": req.pc_col}
+                      if req.insert_at is not None else {})
+            outcome = rerun_with_program(
+                base_path, spec_name, rows, req.rom_words, keep_temp=True,
+                **splice,
+            )
+        else:
+            outcome = rerun_with_rows(
+                base_path, spec_name, rows, keep_temp=True,
+                headers=req.headers or None,
+            )
+    finally:
+        cleanup_injected(inj_temp)
     body = outcome.to_dict()
+    if inj_notes:
+        body["injected"] = inj_notes
     if not outcome.ok:
         return {**body, "outcome": "error", "temp_filename": None}
 
@@ -343,10 +388,13 @@ def l3_adopt_official(req: AdoptRequest) -> dict:
                 "warning": f"Could not read the temp circuit: {exc}"}
     if not specs:
         return {"ok": False, "warning": "The temp circuit has no testcase."}
-    saved = official_store.save_test(req.filename, specs[0].raw_data_string,
+    lt = (session or {}).get("l3_temp") or {}
+    spec = (next((s for s in specs if s.name == lt.get("spec_name")), None)
+            or next((s for s in specs if s.rows), specs[0]))
+    saved = official_store.save_test(req.filename, spec.raw_data_string,
                                      allow_default_override=True)
     return {"ok": True, "filename": req.filename, "sha1": saved["sha1"],
-            "rows": specs[0].row_count()}
+            "rows": spec.row_count()}
 
 
 class DebugRequest(BaseModel):
@@ -456,6 +504,20 @@ def llm_debug(req: DebugRequest) -> dict:
     if inj_notes:
         result["injected"] = inj_notes
     result["rom_verified"] = bool(get_runtime_payload(req.filename, "rom"))
+
+    if (result.get("limit_hit") and not result.get("cards")
+            and not result.get("best_unverified")):
+        result = {
+            "ok": False,
+            "limited": True,
+            "proxy_limit": True,
+            "warning": result.get("limit_message")
+                       or "Daily limit reached on the course server.",
+            "limits": limits.state(),
+        }
+        _log_modeA_result(req.session_id, req.filename,
+                          {**result, "mode": "limited", "cards": []})
+        return result
 
     consumed = (result.get("mode") == "analysis"
                 and bool(result.get("cards")))
