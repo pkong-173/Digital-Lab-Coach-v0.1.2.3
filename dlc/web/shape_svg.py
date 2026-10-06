@@ -258,7 +258,11 @@ def _seven_seg_svg(comp: Component, fill: str, lit: dict | None = None) -> dict:
     w, h = 44, 62
     x0, x1 = 12, 32
     yt, ym, yb = 12, 32, 52
-    parts = [f'<rect x="2" y="2" width="{w-4}" height="{h-4}" rx="3" '
+    bits = "".join("1" if lit and lit.get(s) else "0" for s in "abcdefg")
+    dp = "1" if lit and lit.get("dp") else "0"
+    mask = int(dp + bits[::-1], 2)
+    parts = [f'<title>segments {bits} dp {dp} ({mask:03d})</title>',
+             f'<rect x="2" y="2" width="{w-4}" height="{h-4}" rx="3" '
              f'fill="{fill}" stroke="{_STROKE}" stroke-width="1.4"/>']
     # a,b,c,d,e,f,g are the standard segments; dp is the dot.
     segs = {
