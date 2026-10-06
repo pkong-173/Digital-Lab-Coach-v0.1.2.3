@@ -364,16 +364,7 @@ function flushTelemetry(useBeacon = false) {
   } catch { /* never let telemetry break the app */ }
 }
 setInterval(flushTelemetry, 15000);
-
-function presencePing() {
-  fetch("/api/presence", { method: "POST", keepalive: true }).catch(() => {});
-}
-presencePing();
-setInterval(presencePing, 5000);
-window.addEventListener("pagehide", () => {
-  flushTelemetry(true);
-  try { navigator.sendBeacon("/api/presence/bye"); } catch { /* ignore */ }
-});
+window.addEventListener("pagehide", () => flushTelemetry(true));
 
 const MUTE_THRESHOLD = 3;
 let mutedByUser = new Set();   
