@@ -60,7 +60,7 @@ bottom, then **Create**:
 
 | Field | Value |
 |---|---|
-| Git Repo URL | `https://github.com/KraLurmumcoelcarix-173/Digital-Lab-Coach-v0.1.2.3` (or your fork), wait for *Validated* |
+| Git Repo URL | `https://github.com/pkong-173/Digital-Lab-Coach-v0.1.2.3` (or your fork), wait for *Validated* |
 | Git reference | `master` |
 | Context dir | `/` |
 | Edit Import Strategy | **Dockerfile**, path `proxy/Dockerfile` |

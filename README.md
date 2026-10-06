@@ -1,6 +1,6 @@
 # Digital Lab Coach (DLC)
 
-[![Download](docs/download_button.svg)](https://github.com/KraLurmumcoelcarix-173/Digital-Lab-Coach-v0.1.2.3/releases/latest/download/DigitalLabCoach.zip)
+[![Download](docs/download_button.svg)](https://github.com/pkong-173/Digital-Lab-Coach-v0.1.2.3/releases/latest/download/DigitalLabCoach.zip)
 
 A hybrid deterministic-checker + LLM feedback tool for debugging
 [Digital](https://github.com/hneemann/Digital) circuit labs.
