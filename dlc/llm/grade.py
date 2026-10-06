@@ -175,9 +175,7 @@ def grade_summary(
     )
     if not result["ok"]:
         return {"ok": False, "error": result["error"], "total": None,
-                "sub_scores": [], "grader_model": grader_model, "usage": result["usage"],
-                "limit_hit": bool(result.get("limit_hit")),
-                "capacity_hit": bool(result.get("capacity_hit"))}
+                "sub_scores": [], "grader_model": grader_model, "usage": result["usage"]}
 
     parsed = _parse_grader_json(result["text"])
     if parsed is None:

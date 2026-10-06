@@ -5,7 +5,11 @@ Gradescope-style official-testcase injection for test runs.
 from __future__ import annotations
 
 import os
+import threading
 import xml.etree.ElementTree as ET
+
+_TEMP_LOCK = threading.Lock()
+_TEMP_USERS: dict[str, int] = {}
 
 
 def _official_testcase(filename: str) -> str | None:
@@ -213,7 +217,10 @@ def prepare_injected_run(path: str, filename: str) -> tuple[str | None, list[str
             return None, []
         d, base = os.path.split(path)
         temp_path = os.path.join(d, f".dlc_injected__{base}")
-        tree.write(temp_path, encoding="utf-8", xml_declaration=True)
+        with _TEMP_LOCK:
+            if not _TEMP_USERS.get(temp_path):
+                tree.write(temp_path, encoding="utf-8", xml_declaration=True)
+            _TEMP_USERS[temp_path] = _TEMP_USERS.get(temp_path, 0) + 1
         return temp_path, notes
     except Exception:
         return None, []
@@ -245,7 +252,13 @@ def inject_official_tests_in_place(path: str, filename: str) -> list[str]:
 def cleanup_injected(temp_path: str | None) -> None:
     if not temp_path:
         return
-    try:
-        os.unlink(temp_path)
-    except OSError:
-        pass
+    with _TEMP_LOCK:
+        left = _TEMP_USERS.get(temp_path, 0) - 1
+        if left > 0:
+            _TEMP_USERS[temp_path] = left
+            return
+        _TEMP_USERS.pop(temp_path, None)
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass

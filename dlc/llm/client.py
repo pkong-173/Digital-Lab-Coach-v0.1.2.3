@@ -274,36 +274,6 @@ def _call_openai(prompt, model, key, max_tokens, system, effort=None) -> dict:
             "error": _friendly_error(last_err, "OpenAI"),
             "usage": None, "model": model}
 
-_PROXY_BUDGET: dict[str, dict] = {}
-
-
-def _remember_budget(feature, r: dict) -> None:
-    f = feature or "other"
-    if r.get("limit_hit"):
-        _PROXY_BUDGET[f] = {
-            "hit": True, "capacity": bool(r.get("capacity_hit")),
-            "message": r.get("error"), "used": None, "budget": None,
-            "date": time.strftime("%Y-%m-%d"),
-        }
-        return
-    lim = r.get("limit")
-    if not isinstance(lim, dict):
-        return
-    used, budget = lim.get("used"), lim.get("budget")
-    _PROXY_BUDGET[f] = {
-        "hit": (isinstance(used, int) and isinstance(budget, int)
-                and used >= budget),
-        "capacity": False, "message": None,
-        "used": used, "budget": budget,
-        "date": time.strftime("%Y-%m-%d"),
-    }
-
-
-def proxy_budget_state() -> dict:
-    today = time.strftime("%Y-%m-%d")
-    return {f: {k: v for k, v in e.items() if k != "date"}
-            for f, e in _PROXY_BUDGET.items() if e.get("date") == today}
-
 
 def call_llm(prompt, *, api_key=None, model=DEFAULT_MODEL,
              max_tokens=DEFAULT_MAX_TOKENS, system=None, effort=None,
@@ -318,10 +288,8 @@ def call_llm(prompt, *, api_key=None, model=DEFAULT_MODEL,
     if proxy_url and not os.environ.get("DLC_PROXY_SELF"):
         r = _call_proxy(prompt, model, max_tokens, system, effort,
                         feature, proxy_url, proxy_token)
-        unreachable = r.pop("proxy_unreachable", False)
-        if not unreachable:
-            _remember_budget(feature, r)
-        if not (unreachable and get_api_key(provider)):
+        if not (r.pop("proxy_unreachable", False)
+                and get_api_key(provider)):
             return r
     key = api_key or get_api_key(provider)
     if not key:

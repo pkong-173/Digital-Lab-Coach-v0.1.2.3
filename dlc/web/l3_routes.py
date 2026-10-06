@@ -505,20 +505,6 @@ def llm_debug(req: DebugRequest) -> dict:
         result["injected"] = inj_notes
     result["rom_verified"] = bool(get_runtime_payload(req.filename, "rom"))
 
-    if (result.get("limit_hit") and not result.get("cards")
-            and not result.get("best_unverified")):
-        result = {
-            "ok": False,
-            "limited": True,
-            "proxy_limit": True,
-            "warning": result.get("limit_message")
-                       or "Daily limit reached on the course server.",
-            "limits": limits.state(),
-        }
-        _log_modeA_result(req.session_id, req.filename,
-                          {**result, "mode": "limited", "cards": []})
-        return result
-
     consumed = (result.get("mode") == "analysis"
                 and bool(result.get("cards")))
     result["limits"] = limits.consume("modeA") if consumed else limits.state()

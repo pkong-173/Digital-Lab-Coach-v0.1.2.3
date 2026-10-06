@@ -1551,13 +1551,6 @@ def list_models() -> dict:
         })
     return {"models": models, "default": llm_client.DEFAULT_MODEL}
 
-
-@app.get("/api/llm/limits")
-def llm_limits() -> dict:
-    from dlc.l3 import limits
-    return {"ok": True, "local": limits.state(),
-            "proxy": llm_client.proxy_budget_state()}
-
 @app.get("/api/library")
 def get_library(session_id: str, filename: str) -> dict:
     target = _resolve_target(session_id, filename)

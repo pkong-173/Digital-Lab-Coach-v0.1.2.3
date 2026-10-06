@@ -81,6 +81,7 @@ def build_targets(report: TreeCoverageReport) -> list[dict]:
             "clock_col": clock_col,
             "has_program_rom": False,
         }
+        target["_existing_all"] = existing
         if synthetic:
             target["synthetic"] = True
             target["note"] = ("this circuit has no testcase yet: no example "
@@ -145,9 +146,11 @@ def build_prompt(report: TreeCoverageReport, targets: list[dict]) -> str:
     for c in slim["circuits"]:
         c.pop("flags", None)
         c.pop("path", None)
+    shown = [{k: v for k, v in t.items() if not k.startswith("_")}
+             for t in targets]
     return (template
             .replace("<<REPORT_JSON>>", json.dumps(slim, indent=1))
-            .replace("<<TARGETS_JSON>>", json.dumps(targets, indent=1)))
+            .replace("<<TARGETS_JSON>>", json.dumps(shown, indent=1)))
 
 def parse_proposals(text: str) -> list[dict]:
     obj, _why = extract_json_object(text)     # tolerant of a cut-off tail
@@ -190,14 +193,51 @@ def _row_key(raw: str, headers: list[str]) -> tuple:
     return tuple(key)
 
 
+def _input_columns(t: dict) -> list[int] | None:
+    if t.get("has_clock"):
+        return None
+    labels = [i["label"] for i in t.get("inputs") or []]
+    if not labels or any(lbl not in t["headers"] for lbl in labels):
+        return None
+    return [t["headers"].index(lbl) for lbl in labels]
+
+
+def _input_key(raw: str, cols: list[int]) -> tuple:
+    cells = raw.split("#", 1)[0].split()
+    key = []
+    for col in cols:
+        if col >= len(cells):
+            key.append(None)
+            continue
+        tok = _tokenize(cells[col])
+        key.append(("v", tok.value) if tok.kind == "int" else ("r", tok.raw.upper()))
+    return tuple(key)
+
+
+def _categories_fit(cats: list[dict], headers: list[str]) -> bool:
+    cols = set(headers)
+    for cat in cats or []:
+        when = cat.get("when") or {}
+        if any(c not in cols for c in when):
+            return False
+    return True
+
+
 def validate_and_dedupe(
     proposals: list[dict], targets: list[dict], manifest: dict | None = None,
 ) -> tuple[list[dict], list[dict]]:
     by_file = {t["file"]: t for t in targets}
     seen: dict[str, set] = {t["file"]: set() for t in targets}
+    in_cols: dict[str, list[int]] = {}
+    seen_inputs: dict[str, set] = {}
     for t in targets:
-        for raw in t["existing_rows"]:
+        rows_all = t.get("_existing_all", t["existing_rows"])
+        for raw in rows_all:
             seen[t["file"]].add(_row_key(raw, t["headers"]))
+        cols = _input_columns(t)
+        if cols is not None:
+            in_cols[t["file"]] = cols
+            seen_inputs[t["file"]] = {_input_key(raw, cols) for raw in rows_all}
 
     valid: list[dict] = []
     rejected: list[dict] = []
@@ -229,6 +269,16 @@ def validate_and_dedupe(
             if k in seen[p["file"]]:
                 bad.append((raw, "duplicate of an existing or proposed row"))
                 continue
+            cols = in_cols.get(p["file"])
+            if cols is not None:
+                ik = _input_key(raw, cols)
+                if ik in seen_inputs[p["file"]]:
+                    bad.append((raw, "duplicate input vector — an existing "
+                                     "or proposed row already tests these "
+                                     "inputs, so this row adds nothing (or "
+                                     "contradicts that row's expectation)"))
+                    continue
+                seen_inputs[p["file"]].add(ik)
             seen[p["file"]].add(k)
             good_rows.append(raw)
         if good_rows:
@@ -474,7 +524,7 @@ def propose_rows(
     if m:
         for t in targets:
             cats = (m.get("categories") or {}).get(t["file"])
-            if cats:
+            if cats and _categories_fit(cats, t["headers"]):
                 t["categories"] = cats
                 if m.get("description"):
                     t["category_conventions"] = m["description"]
@@ -496,8 +546,6 @@ def propose_rows(
         return {"ok": False, "proposals": [], "rejected": [],
                 "model": used_model,
                 "error": resp.get("error") or "Model call failed.",
-                "limit_hit": bool(resp.get("limit_hit")),
-                "capacity_hit": bool(resp.get("capacity_hit")),
                 "notes": []}
 
     proposals = parse_proposals(resp.get("text") or "")
@@ -553,6 +601,14 @@ def _complete_targets(report: TreeCoverageReport, targets: list[dict],
             out[t["file"]] = (
                 f"{t['file']}: the program already executes all {n} "
                 f"instruction categories — the coach has nothing to add.")
+        elif (cov is not None and not t.get("has_clock")
+                and getattr(cov, "input_space", None)
+                and getattr(cov, "row_count", 0)
+                and getattr(cov, "distinct_vectors", 0) >= cov.input_space):
+            out[t["file"]] = (
+                f"{t['file']}: all {cov.input_space} possible input vectors "
+                f"are already tested (100% coverage) — the coach has nothing "
+                f"to add.")
     return out
 
 

@@ -1871,6 +1871,7 @@ async function showSignalFlowForRow(specIdx, rowIdx, trEl) {
 
   const request = ++sigRequest;
   let sim;
+  let failure = null;
   try {
     const res = await fetch("/api/simulate", {
       method: "POST",
@@ -1880,14 +1881,25 @@ async function showSignalFlowForRow(specIdx, rowIdx, trEl) {
         spec_index: specIdx, row_index: rowIdx,
       }),
     });
-    if (!res.ok) { console.warn("simulate failed", res.status); return; }
-    sim = await res.json();
+    if (res.ok) sim = await res.json();
+    else failure = `server error ${res.status}`;
   } catch (err) {
-    console.warn("simulate error", err);
-    return;
+    failure = `network error: ${err}`;
   }
   if (request !== sigRequest) return;
-  if (!sim || sim.ok === false) return;
+  if (!failure && (!sim || sim.ok === false)) {
+    failure = (sim && sim.warning) || "no result";
+  }
+  if (failure) {
+    console.warn("simulate failed", failure);
+    clearSignalFlow(cy);
+    sigActive = null;
+    const hud = ensureClockHud();
+    hud.className = "clock-hud";
+    hud.textContent = `Signal flow for row ${rowIdx} could not be computed — click the row again. (${failure})`;
+    hud.style.display = "block";
+    return;
+  }
   applySignalFlow(sim);
   sigActive = { specIdx, rowIdx };
   updateClockHint();
@@ -2256,72 +2268,6 @@ async function refreshModelCatalog() {
   }
 }
 
-  /*# ───────────────────────────────────────────────────────────────────
-  *#  Daily AI limits.
-  *# ──────────────────────────────────────────────────────────────────#*/
-const llmBudget = { local: null, proxy: {} };
-
-const LLM_FEATURE_LABELS = {
-  explain: "circuit summaries", grade: "summary grades",
-  modeA: "failed-test analyses", modeB: "Coverage Coach calls",
-};
-
-// {hit, title} for a course-server feature; title is the hover text.
-function proxyLimitInfo(feature) {
-  const b = llmBudget.proxy && llmBudget.proxy[feature];
-  if (!b || !b.hit) return { hit: false, title: "" };
-  if (b.capacity) {
-    return { hit: true, title: b.message ||
-      "The course server has reached its daily capacity for everyone — try again tomorrow." };
-  }
-  const n = (typeof b.used === "number" && typeof b.budget === "number")
-    ? ` (${b.used}/${b.budget} ${LLM_FEATURE_LABELS[feature] || feature} today)` : "";
-  return { hit: true, title:
-    `Daily limit reached on the course server for this computer${n} — ` +
-    `it resets tomorrow. What is already shown stays.` };
-}
-
-// A reply that says limit_hit grays its feature out right away.
-function noteProxyLimit(feature, payload) {
-  if (!payload || !payload.limit_hit) return false;
-  llmBudget.proxy[feature] = { hit: true, capacity: !!payload.capacity_hit,
-                               message: payload.error || payload.warning || null };
-  llmBudgetChanged();
-  return true;
-}
-
-async function refreshLlmLimits() {
-  try {
-    const r = await fetch("/api/llm/limits");
-    const d = await r.json();
-    if (d && d.ok) {
-      llmBudget.local = d.local || null;
-      llmBudget.proxy = d.proxy || {};
-    }
-  } catch {}
-  llmBudgetChanged();
-}
-
-function llmBudgetChanged() {
-  l2ApplyBudget();
-  if (typeof l3OnLimitsChanged === "function") l3OnLimitsChanged();
-}
-
-let l2Running = false;
-function l2ApplyBudget() {
-  if (!l2LlmBtn) return;
-  const lim = proxyLimitInfo("explain");
-  if (l2LlmBtn.dataset.defaultTitle == null) l2LlmBtn.dataset.defaultTitle = l2LlmBtn.title || "";
-  l2LlmBtn.disabled = lim.hit || l2Running;
-  l2LlmBtn.title = lim.hit ? lim.title : l2LlmBtn.dataset.defaultTitle;
-  const chip = document.getElementById("l2-llm-limit");
-  if (chip) {
-    chip.textContent = lim.hit ? "daily limit reached" : "";
-    chip.title = lim.title;
-    chip.classList.toggle("hidden", !lim.hit);
-  }
-}
-
 const PRODUCTION_MODELS = ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"];
 function populateModelSelect(defaultModel) {
   const offered = modelCatalog.filter((m) => PRODUCTION_MODELS.includes(m.id));
@@ -2386,7 +2332,6 @@ if (graderSelect) {
 }
 
 refreshKeyChip();
-refreshLlmLimits();
 
 if (keyChipBtn) keyChipBtn.addEventListener("click", () => {
   for (const p of KEY_PROVIDERS) {
@@ -2775,12 +2720,13 @@ l2LlmBtn.addEventListener("click", async () => {
   }
 
   const signal = l2BeginAbortable();
-  l2Running = true;
-  l2ApplyBudget();
+  l2LlmBtn.disabled = true;
   l2LlmStatus.innerHTML =
     `Talking to ${escapeHtml(selectedInfo ? selectedInfo.label : "the model")}` +
     `<span class="llm-dots" aria-hidden="true"><i></i><i></i><i></i></span>`;
   l2LlmStatus.className = "l2-llm-status running";
+  l2LlmOutput.innerHTML = "";
+  l2LlmOutput.classList.add("empty");
   logEvent("l2_llm_started", {
     filename: file.filename, has_goal: goal.length > 0, model: selectedModel,
   });
@@ -2800,8 +2746,7 @@ l2LlmBtn.addEventListener("click", async () => {
       signal,
     });
   } catch (err) {
-    l2Running = false;
-    l2ApplyBudget();
+    l2LlmBtn.disabled = false;
     l2EndAbortable();
     l2ForFile(file.filename, () => {
       if (err.name === "AbortError") {
@@ -2816,8 +2761,7 @@ l2LlmBtn.addEventListener("click", async () => {
     });
     return;
   }
-  l2Running = false;
-  l2ApplyBudget();
+  l2LlmBtn.disabled = false;
 
   if (!res.ok) {
     const t = await res.text();
@@ -2829,20 +2773,14 @@ l2LlmBtn.addEventListener("click", async () => {
     return;
   }
   const payload = await res.json();
-  logEvent("l2_llm_complete", { filename: file.filename, ok: payload.ok,
-                                gated: !!payload.gate_message,
-                                limited: !!payload.limit_hit });
+  logEvent("l2_llm_complete", { filename: file.filename, ok: payload.ok, gated: !!payload.gate_message });
   if (payload.ok && !payload.gate_message && typeof dlcMaybeAskFeedback === "function") {
     dlcMaybeAskFeedback("explain", file.filename);
   }
-  const limited = noteProxyLimit("explain", payload);
-  refreshLlmLimits();
 
   l2ForFile(file.filename, () => {
     if (!payload.ok) {
-      l2LlmStatus.textContent = limited
-        ? (payload.error || "Daily limit reached — try again tomorrow.")
-        : `Error: ${payload.error || "unknown"}`;
+      l2LlmStatus.textContent = `Error: ${payload.error || "unknown"}`;
       l2LlmStatus.className = "l2-llm-status error";
       l2EndAbortable();
       return;
@@ -3431,26 +3369,13 @@ async function gradeCurrentSummary(summaryText, filename) {
   if (!file || file.error) return;
   lastGradedSummary = summaryText;
   const graderModel = graderSelect ? graderSelect.value || null : null;
-  const gradeLimit = proxyLimitInfo("grade");
-  if (gradeLimit.hit) {
-    l2ForFile(file.filename, () => _gradeLimitNote(gradeLimit.title));
-    l2EndAbortable();
-    return;
-  }
   // Reuse the summarize flow's abort scope if present; a standalone re-grade
   // (grader-dropdown change) opens its own so Stop works there too.
   const signal = l2Abort ? l2Abort.signal : l2BeginAbortable();
 
-  const working =
+  gradeBody.innerHTML =
     `<span class="muted">Grading with ${escapeHtml(graderModel || "default")}` +
     `<span class="llm-dots" aria-hidden="true"><i></i><i></i><i></i></span></span>`;
-  l2ForFile(file.filename, () => {
-    if (gradeBody.querySelector(".grade-info")) {
-      _gradePendingNote(working);
-    } else {
-      gradeBody.innerHTML = working;
-    }
-  });
 
   let res;
   try {
@@ -3479,15 +3404,9 @@ async function gradeCurrentSummary(summaryText, filename) {
   }
   let g;
   try { g = await res.json(); } catch { g = null; }
-  const gradeLimited = noteProxyLimit("grade", g);
-  refreshLlmLimits();
   l2ForFile(file.filename, () => {
     if (!g || !g.ok) {
-      if (gradeLimited) {
-        _gradeLimitNote(proxyLimitInfo("grade").title);
-      } else {
-        gradeBody.innerHTML = `<span style="color:#b91c1c">${escapeHtml((g && g.error) || ("Grader error " + res.status))}</span>`;
-      }
+      gradeBody.innerHTML = `<span style="color:#b91c1c">${escapeHtml((g && g.error) || ("Grader error " + res.status))}</span>`;
       l2EndAbortable();
       return;
     }
@@ -3504,35 +3423,6 @@ async function gradeCurrentSummary(summaryText, filename) {
       host.appendChild(n);
     }
   });
-}
-
-function _gradePendingNote(html) {
-  if (!gradeBody) return;
-  _gradeClearNotes();
-  const host = gradeBody.querySelector(".grade-info") || gradeBody;
-  const n = document.createElement("div");
-  n.className = "grade-note grade-note-limit";
-  n.innerHTML = html;
-  host.appendChild(n);
-}
-
-function _gradeClearNotes() {
-  if (!gradeBody) return;
-  gradeBody.querySelectorAll(".grade-note-limit").forEach((n) => n.remove());
-}
-
-function _gradeLimitNote(text) {
-  if (!gradeBody) return;
-  _gradeClearNotes();
-  const info = gradeBody.querySelector(".grade-info");
-  if (info) {
-    const n = document.createElement("div");
-    n.className = "grade-note grade-note-limit";
-    n.textContent = `Not re-graded: ${text} The grade above is the previous one.`;
-    info.appendChild(n);
-  } else {
-    gradeBody.innerHTML = `<div class="muted grade-note-limit">${escapeHtml(text)}</div>`;
-  }
 }
 
 function renderGradeDonut(g) {
