@@ -43,10 +43,14 @@ def test_call_llm_fails_soft_with_a_clear_message(_offline):
     assert "internet connection" in (resp["error"] or "")
 
 
-def test_propose_rows_offline_reports_and_never_raises(_offline, monkeypatch):
+def test_propose_rows_offline_reports_and_never_raises(_offline, monkeypatch, tmp_path):
     monkeypatch.setenv("DLC_LIMITS_PATH", "/tmp/does-not-matter-limits.json")
-    out = proposer.propose_rows(
-        "data/sample_circuits/tier1_minimal/single_and.dig")
+    import re as _re
+    xml = open("data/sample_circuits/tier1_minimal/single_and.dig").read()
+    m = _re.search(r"<dataString>.*?</dataString>", xml, _re.S)
+    (tmp_path / "single_and.dig").write_text(xml.replace(
+        m.group(0), "<dataString>A B Y\n0 0 0\n1 1 1</dataString>"))
+    out = proposer.propose_rows(str(tmp_path / "single_and.dig"))
     assert out["ok"] is False
     assert "internet connection" in (out["error"] or "")
     assert out["proposals"] == []

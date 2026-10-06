@@ -78,8 +78,8 @@ def test_parse_returns_empty_on_garbage():
     assert proposer.parse_proposals("") == []
 
 
-def test_validate_drops_illegal_duplicate_and_mistargeted_rows():
-    report = scan_tree_coverage(_AND)
+def test_validate_drops_illegal_duplicate_and_mistargeted_rows(tmp_path):
+    report = scan_tree_coverage(str(_two_row_and(tmp_path)))
     targets = proposer.build_targets(report)
     proposals = [
         {"file": "single_and.dig", "spec_name": targets[0]["spec_name"],
@@ -227,9 +227,10 @@ def _counting_fake(calls):
 def test_propose_rows_stops_only_for_a_complete_decode_file(tmp_path, monkeypatch):
     complete = [{"name": "both_high", "when": {"A": 1, "B": 1}},
                 {"name": "a_low", "when": {"A": 0}}]
+    partial = _two_row_and(tmp_path)
     _and_manifest(tmp_path, monkeypatch, complete)
     calls = []
-    out = proposer.propose_rows(_AND, call=_counting_fake(calls))
+    out = proposer.propose_rows(str(partial), call=_counting_fake(calls))
     assert calls and out["ok"] is True
     assert "all_categories_covered" not in out
     _and_manifest(tmp_path, monkeypatch, complete, decode=True)
@@ -249,7 +250,7 @@ def test_propose_rows_stops_only_for_a_complete_decode_file(tmp_path, monkeypatc
         {"name": "never", "when": {"A": 2}},
     ], decode=True)
     calls = []
-    out2 = proposer.propose_rows(_AND, call=_counting_fake(calls))
+    out2 = proposer.propose_rows(str(partial), call=_counting_fake(calls))
     assert calls and out2["ok"] is True
     assert "all_categories_covered" not in out2
 
@@ -337,8 +338,8 @@ def test_model_gate_judges_rows_by_the_labs_formula_model(tmp_path, monkeypatch)
                in n for n in out["notes"])
     bad = out["rejected"][0]
     assert bad["rows"] == [rows[4]]
-    assert "formula model" in bad["reason"] and "Out=0x1" in bad["reason"]
-    assert bad["kind"] == "wrong_expectation"
+    assert "duplicate input vector" in bad["reason"]
+    assert bad["kind"] == "duplicate"
 
 
 def _shifter_proposal(tmp_path, monkeypatch, manifest, xml=_SHIFTER_XML):
@@ -391,14 +392,16 @@ def test_model_gate_steps_aside_when_the_model_contradicts_the_files_rows(
     assert not any("formula model" in n for n in out["notes"])
 
 
-def test_propose_rows_survives_model_failure_and_garbage():
+def test_propose_rows_survives_model_failure_and_garbage(tmp_path):
+    partial = str(_two_row_and(tmp_path))
+
     def dead(prompt, **kw):
         return {"ok": False, "text": None, "error": "no key", "usage": None,
                 "model": kw.get("model")}
-    out = proposer.propose_rows(_AND, call=dead)
+    out = proposer.propose_rows(partial, call=dead)
     assert out["ok"] is False and "no key" in out["error"]
 
-    out2 = proposer.propose_rows(_AND, call=_fake("not json at all"))
+    out2 = proposer.propose_rows(partial, call=_fake("not json at all"))
     assert out2["ok"] is True and out2["proposals"] == []
     assert out2["notes"]
 
@@ -410,14 +413,15 @@ def _upload_and():
     return r.json()["session_id"]
 
 
-def test_propose_endpoint_uses_the_proposer(monkeypatch):
-    spec_name = proposer.build_targets(scan_tree_coverage(_AND))[0]["spec_name"]
+def test_propose_endpoint_uses_the_proposer(monkeypatch, tmp_path):
+    student = _two_row_and(tmp_path)
+    spec_name = proposer.build_targets(scan_tree_coverage(str(student)))[0]["spec_name"]
     text = json.dumps({"proposals": [
         {"file": "single_and.dig", "spec_name": spec_name,
-         "rows": ["0 1 0"], "why": "boundary"},
+         "rows": ["0 0 0"], "why": "boundary"},
     ]})
     monkeypatch.setattr(proposer, "call_llm", _fake(text))
-    sid = _upload_and()
+    sid = _upload_paths(str(student))
     try:
         r = client.post("/api/l3/propose", json={
             "session_id": sid, "filename": "single_and.dig",
