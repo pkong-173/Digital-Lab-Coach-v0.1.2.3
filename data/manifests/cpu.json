@@ -14,8 +14,8 @@
   "no_lazy_gate": ["control-unit.dig"],
   "subcircuits": {
     "alu.dig": {
-      "model": "lab5_alu",
-      "role": "ALU: applies the operation selected by ALUOp (AND, OR, ADD, XOR, SUB, SLT and shifts of B by A) and raises FlagZ when the result is zero."
+      "model": "rv32i_alu",
+      "role": "ALU: applies the operation selected by ALUOp (AND, OR, ADD, XOR, SLL, SRL, SUB, SLT, SRA) to A and B, shifting A by B[4:0], and raises FlagZ when the result is zero."
     },
     "control-unit.dig": {
       "model": "lab5_control",
@@ -30,8 +30,8 @@
       "role": "Adder/subtractor: A plus or minus B with signed-overflow and sign flags."
     },
     "bidirectional-shifter.dig": {
-      "model": "bidirectional_shifter",
-      "role": "Shifter: shifts B left, right logical or right arithmetic by A, chosen by Bool."
+      "model": "rv32i_shifter",
+      "role": "Shifter: shifts A left, right logical or right arithmetic by B[4:0], chosen by ShiftOp."
     },
     "boolean-unit.dig": {
       "model": "boolean_unit",
@@ -163,12 +163,12 @@
   },
   "official_tests": {
     "cpu.dig": "52845cf7436dee1da97c4bf4b96ca4cb49f8322a",
-    "alu.dig": "55e59f668e601b00beade984af5d76924292c6a5",
+    "alu.dig": "9ac80e3138ffc3028794cfd2e0a08612534ee3fd",
     "control-unit.dig": "95c7b8dd203dc9090174bb3582d90cb7876516cc",
     "register-file.dig": "9e23eb3263f5675688324ffd07a3f33eb66c171c",
-    "add-sub.dig": "f9bf26813804ac07a943ce3c98a079bba0201afb",
-    "bidirectional-shifter.dig": "20288590b786e5bd78906578a8f3d0d2b2790253",
-    "boolean-unit.dig": "639ad5726555da437ff918178eadfc795a366bfa",
+    "add-sub.dig": "35a7905be10b0834244c193f0e0bcc9d72ce3b14",
+    "bidirectional-shifter.dig": "232be663c19d6a282fb21a6f31985ed4f1b0c917",
+    "boolean-unit.dig": "8ab26519b2066ca6ad4b01bad1fff793f329d298",
     "slt-unit.dig": "3c1a4612aae0270c09f9e02d50c9f159ee66677e"
   },
   "reference_dir": null,
