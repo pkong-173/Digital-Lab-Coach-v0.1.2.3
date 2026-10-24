@@ -254,6 +254,21 @@ def _bidirectional_shifter(i, _s):
     return {"Out": out}, None
 
 
+# The Fall 2026 shifter: shifts A by B[4:0] (RISC-V amount), ShiftOp 0 =
+# left, 1 = right logical, 2 = right arithmetic; arm 3 is tied to zero.
+def _rv32i_shifter(i, _s):
+    a, amt, sel = i["A"] & M32, i["B"] & 31, i["ShiftOp"] & 3
+    if sel == 0:
+        out = (a << amt) & M32
+    elif sel == 1:
+        out = a >> amt
+    elif sel == 2:
+        out = (_s32(a) >> amt) & M32
+    else:
+        out = 0
+    return {"Out": out}, None
+
+
 def _slt_unit(i, _s):
     return {"Result": (i["Sign"] ^ i["Overflow"]) & 1}, None
 
@@ -359,6 +374,11 @@ MODELS: tuple[FormulaModel, ...] = (
         "Shifter: shifts B left, right logical or right arithmetic by A, "
         "chosen by Bool.",
         _IO32 + (("Bool", 2),), (("Out", 32),), _bidirectional_shifter),
+    FormulaModel(
+        "rv32i_shifter",
+        "Shifter: shifts A left, right logical or right arithmetic by "
+        "B[4:0], chosen by ShiftOp.",
+        _IO32 + (("ShiftOp", 2),), (("Out", 32),), _rv32i_shifter),
     FormulaModel(
         "slt_unit",
         "Set-less-than unit: derives A<B from the subtractor's sign and "

@@ -119,7 +119,8 @@ Shipped formulas:
 | `rv32i_register_file` | ReadReg1, ReadReg2, WriteReg, WriteData, RegWrite, Clock → ReadData1, ReadData2 | 32 registers, x0 stays 0 |
 | `add_sub` | A, B, Sub → Out, Overflow, Sign | add / subtract with flags |
 | `boolean_unit` | A, B, Bool → Out | AND, OR, XOR, NOR |
-| `bidirectional_shifter` | A, B, Bool → Out | B shifted by A: left, right, arithmetic right |
+| `rv32i_shifter` | A, B, ShiftOp → Out | A shifted by B[4:0]: 0 left, 1 right, 2 arithmetic right (Fall 2026 shifter) |
+| `bidirectional_shifter` | A, B, Bool → Out | the original Lab 5 shifter: B shifted by A[5:0]: 0 left, 2 right, 3 arithmetic right |
 | `slt_unit` | Sign, Overflow → Result | signed less-than from the flags |
 | `rv32i_immgen` | Instr, ImmSrc → Imm | I, S, B, U, J immediates |
 | `rv32i_branch_unit` | A, B, funct3, Branch, Jump → Taken | the six branch conditions plus jump |
