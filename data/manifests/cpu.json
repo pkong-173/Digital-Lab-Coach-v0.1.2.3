@@ -6,7 +6,7 @@
     "alu.dig",
     "control-unit.dig",
     "register-file.dig",
-    "add-sub.dig",
+    "add-sub-unit.dig",
     "bidirectional-shifter.dig",
     "boolean-unit.dig",
     "slt-unit.dig"
@@ -25,7 +25,7 @@
       "model": "rv32i_register_file",
       "role": "Register file: 32 registers read on two ports; writes WriteData into WriteReg on the clock edge when RegWrite is 1 (x0 stays 0)."
     },
-    "add-sub.dig": {
+    "add-sub-unit.dig": {
       "model": "add_sub",
       "role": "Adder/subtractor: A plus or minus B with signed-overflow and sign flags."
     },
@@ -158,18 +158,24 @@
         "when": {
           "ALUOp": "0b1000"
         }
+      },
+      {
+        "name": "SLTU",
+        "when": {
+          "ALUOp": "0b1001"
+        }
       }
     ]
   },
   "official_tests": {
     "cpu.dig": "52845cf7436dee1da97c4bf4b96ca4cb49f8322a",
-    "alu.dig": "9ac80e3138ffc3028794cfd2e0a08612534ee3fd",
+    "alu.dig": "67fc380408bfda56279dc361a74de034fe3b1e39",
     "control-unit.dig": "95c7b8dd203dc9090174bb3582d90cb7876516cc",
     "register-file.dig": "9e23eb3263f5675688324ffd07a3f33eb66c171c",
-    "add-sub.dig": "35a7905be10b0834244c193f0e0bcc9d72ce3b14",
+    "add-sub-unit.dig": "35a7905be10b0834244c193f0e0bcc9d72ce3b14",
     "bidirectional-shifter.dig": "232be663c19d6a282fb21a6f31985ed4f1b0c917",
     "boolean-unit.dig": "8ab26519b2066ca6ad4b01bad1fff793f329d298",
-    "slt-unit.dig": "3c1a4612aae0270c09f9e02d50c9f159ee66677e"
+    "slt-unit.dig": "571a94298342afcfd7d6466e4c18e7ea0f8c55af"
   },
   "reference_dir": null,
   "_note": "reference_dir stays null in the repo; instructors point DLC_REFERENCE_DIR at their local solutions folder.",

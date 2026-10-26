@@ -8,25 +8,20 @@
     "branchunit.dig",
     "datamemory.dig",
     "alu.dig",
-    "alu_rv32i.dig",
     "register-file.dig",
-    "add-sub.dig",
+    "add-sub-unit.dig",
     "bidirectional-shifter.dig",
     "boolean-unit.dig",
     "slt-unit.dig"
   ],
   "no_lazy_gate": ["controlunit.dig", "cpu_new.dig"],
-  "_note": "alu.dig and alu_rv32i.dig are the same RV32I ALU under either name; keep whichever your tree uses. official_tests stays empty until the lab's tests are registered (Settings → Official tests).",
+  "_note": "The new Lab 5 uses the Fall 2026 ALU under its lab name, alu.dig: the same file, test and sub-units (add-sub-unit.dig, boolean-unit.dig, bidirectional-shifter.dig, slt-unit.dig) as cpu.json. official_tests lists the Fall 2026 hashes; a user override from Settings → Official tests still wins.",
   "subcircuits": {
     "controlunit.dig": {
       "model": "rv32i_control",
       "role": "Control unit: decodes opcode/funct3/funct7 into the 17 datapath control signals for the 37 RV32I instructions; an unknown word is a NOP."
     },
     "alu.dig": {
-      "model": "rv32i_alu",
-      "role": "ALU: applies the operation selected by ALUOp (AND, OR, ADD, XOR, SLL, SRL, SUB, SLT, SRA, SLTU) to A and B; FlagZ is 1 when the result is zero."
-    },
-    "alu_rv32i.dig": {
       "model": "rv32i_alu",
       "role": "ALU: applies the operation selected by ALUOp (AND, OR, ADD, XOR, SLL, SRL, SUB, SLT, SRA, SLTU) to A and B; FlagZ is 1 when the result is zero."
     },
@@ -46,13 +41,13 @@
       "model": "rv32i_register_file",
       "role": "Register file: 32 registers read on two ports; writes WriteData into WriteReg on the clock edge when RegWrite is 1 (x0 stays 0)."
     },
-    "add-sub.dig": {
+    "add-sub-unit.dig": {
       "model": "add_sub",
       "role": "Adder/subtractor: A plus or minus B with signed-overflow and sign flags."
     },
     "bidirectional-shifter.dig": {
-      "model": "bidirectional_shifter",
-      "role": "Shifter: shifts B left, right logical or right arithmetic by A, chosen by Bool."
+      "model": "rv32i_shifter",
+      "role": "Shifter: shifts A left, right logical or right arithmetic by B[4:0], chosen by ShiftOp."
     },
     "boolean-unit.dig": {
       "model": "boolean_unit",
@@ -115,18 +110,6 @@
       {"name": "SRA",  "when": {"ALUOp": "0b1000"}},
       {"name": "SLTU", "when": {"ALUOp": "0b1001"}}
     ],
-    "alu_rv32i.dig": [
-      {"name": "AND",  "when": {"ALUOp": "0b0000"}},
-      {"name": "OR",   "when": {"ALUOp": "0b0001"}},
-      {"name": "ADD",  "when": {"ALUOp": "0b0010"}},
-      {"name": "XOR",  "when": {"ALUOp": "0b0011"}},
-      {"name": "SLL",  "when": {"ALUOp": "0b0100"}},
-      {"name": "SRL",  "when": {"ALUOp": "0b0101"}},
-      {"name": "SUB",  "when": {"ALUOp": "0b0110"}},
-      {"name": "SLT",  "when": {"ALUOp": "0b0111"}},
-      {"name": "SRA",  "when": {"ALUOp": "0b1000"}},
-      {"name": "SLTU", "when": {"ALUOp": "0b1001"}}
-    ],
     "immgen.dig": [
       {"name": "I-type", "when": {"ImmSrc": 0}},
       {"name": "S-type", "when": {"ImmSrc": 1}},
@@ -159,7 +142,16 @@
       {"name": "hold",  "when": {"RegWrite": 0}}
     ]
   },
-  "official_tests": {},
+  "official_tests": {
+    "cpu_new.dig": "7a6ce89c08a54b681c5e955378a8a4b70b4ab3b5",
+    "controlunit.dig": "9b4046190baed63e2471025dee770abd9a9e7235",
+    "alu.dig": "67fc380408bfda56279dc361a74de034fe3b1e39",
+    "register-file.dig": "9e23eb3263f5675688324ffd07a3f33eb66c171c",
+    "add-sub-unit.dig": "35a7905be10b0834244c193f0e0bcc9d72ce3b14",
+    "bidirectional-shifter.dig": "232be663c19d6a282fb21a6f31985ed4f1b0c917",
+    "boolean-unit.dig": "8ab26519b2066ca6ad4b01bad1fff793f329d298",
+    "slt-unit.dig": "571a94298342afcfd7d6466e4c18e7ea0f8c55af"
+  },
   "reference_dir": null,
   "program_decode": {
     "categories_from": "controlunit.dig",
