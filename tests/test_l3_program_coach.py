@@ -27,9 +27,9 @@ def _program():
 
 def test_manifest_attaches_to_the_tree_that_shares_most_files():
     new_tree = {"cpu_new.dig", "controlunit.dig", "immgen.dig", "alu.dig",
-                "register-file.dig", "add-sub.dig", "slt-unit.dig"}
+                "register-file.dig", "add-sub-unit.dig", "slt-unit.dig"}
     old_tree = {"cpu.dig", "control-unit.dig", "alu.dig", "register-file.dig",
-                "add-sub.dig", "boolean-unit.dig"}
+                "add-sub-unit.dig", "boolean-unit.dig"}
     assert mf.find_manifest(new_tree)["lab"] == "lab5-rv32i"
     assert mf.find_manifest(old_tree)["lab"] == "lab5"
 

@@ -539,11 +539,13 @@ verified empirically:
   Manifest attachment picks the manifest covering most uploaded files.
 - **Two ALUs, one interface**: `lab5_alu` (shifts B by A[5:0], no
   SLTU) and `rv32i_alu` (shifts A by B[4:0]) are told apart by each
-  file's own testcase. The Fall 2026 ALU test (262 rows, decimal
-  ALUOp) is the `rv32i_alu` behaviour, so `cpu.json` names that model;
-  the matching shifter unit (A by B[4:0], selector `ShiftOp`) is
-  `rv32i_shifter`, while `bidirectional_shifter` keeps the old unit
-  (B by A, selector `Bool`) for older files.
+  file's own testcase. The Fall 2026 ALU (decimal ALUOp, A by B[4:0])
+  is the `rv32i_alu` behaviour and serves both Lab 5s as `alu.dig`
+  (`cpu.json` and `cpu_new.json`, one store entry). Its sub-units are
+  `add-sub-unit.dig`, `boolean-unit.dig`, `bidirectional-shifter.dig`
+  and `slt-unit.dig` (output `Out`); the shifter (A by B[4:0],
+  selector `ShiftOp`) is `rv32i_shifter`, while `bidirectional_shifter`
+  keeps the old unit (B by A, selector `Bool`) for older files.
 
 ## Known limitations to revisit
 

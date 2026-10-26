@@ -99,7 +99,7 @@ def test_add_sub_boolean_shifter_slt():
     assert _ev("bidirectional_shifter", A=1, B=0x80000001, Bool=3)["Out"] == 0xC0000000
     assert _ev("bidirectional_shifter", A=33, B=0x80000001, Bool=0)["Out"] == 0
     assert _ev("bidirectional_shifter", A=4, B=0x80000001, Bool=1)["Out"] == 0
-    assert _ev("slt_unit", Sign=1, Overflow=1)["Result"] == 0
+    assert _ev("slt_unit", Sign=1, Overflow=1)["Out"] == 0
 
 
 # matching, validation and manifest overrides

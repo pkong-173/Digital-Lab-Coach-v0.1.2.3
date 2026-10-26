@@ -121,7 +121,7 @@ Shipped formulas:
 | `boolean_unit` | A, B, Bool → Out | AND, OR, XOR, NOR |
 | `rv32i_shifter` | A, B, ShiftOp → Out | A shifted by B[4:0]: 0 left, 1 right, 2 arithmetic right (Fall 2026 shifter) |
 | `bidirectional_shifter` | A, B, Bool → Out | the original Lab 5 shifter: B shifted by A[5:0]: 0 left, 2 right, 3 arithmetic right |
-| `slt_unit` | Sign, Overflow → Result | signed less-than from the flags |
+| `slt_unit` | Sign, Overflow → Out | signed less-than from the flags |
 | `rv32i_immgen` | Instr, ImmSrc → Imm | I, S, B, U, J immediates |
 | `rv32i_branch_unit` | A, B, funct3, Branch, Jump → Taken | the six branch conditions plus jump |
 | `rv32i_data_memory` | Addr, WriteData, MemWrite, funct3, Clock → ReadData | 32 words, byte/half/word access |
