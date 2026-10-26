@@ -270,7 +270,7 @@ def _rv32i_shifter(i, _s):
 
 
 def _slt_unit(i, _s):
-    return {"Result": (i["Sign"] ^ i["Overflow"]) & 1}, None
+    return {"Out": (i["Sign"] ^ i["Overflow"]) & 1}, None
 
 
 def _immgen(i, _s):
@@ -383,7 +383,7 @@ MODELS: tuple[FormulaModel, ...] = (
         "slt_unit",
         "Set-less-than unit: derives A<B from the subtractor's sign and "
         "overflow flags.",
-        (("Sign", 1), ("Overflow", 1)), (("Result", 1),), _slt_unit),
+        (("Sign", 1), ("Overflow", 1)), (("Out", 1),), _slt_unit),
     FormulaModel(
         "rv32i_immgen",
         "Immediate generator: rebuilds the I, S, B, U or J immediate "
