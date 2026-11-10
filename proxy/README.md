@@ -89,6 +89,13 @@ the course token under Settings → Course server; the tool stores them in
   cluster edge with a valid certificate, so tokens never travel in the
   clear. Plain HTTP is fine for the Option A second-computer smoke test on
   a LAN.
+- Time limit under Option B: the OpenShift router gives up on a request
+  that is still unanswered after 30 seconds unless the route says
+  otherwise, while a model call may take up to `DLC_LLM_TIMEOUT` (180 s).
+  The route therefore carries the annotation
+  `haproxy.router.openshift.io/timeout: 240s` (step 3B.5 of the release
+  guide); without it a slow answer reaches the student as HTTP 504 while
+  the server still finishes and counts the call.
 - Updating the proxy never touches the ledger: restart it on the laptop
   (Option A) or push and *Start build* (Option B). The relay reuses
   `dlc/llm/client.py` (same request shaping, timeouts, and reasoning-model

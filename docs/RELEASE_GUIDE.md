@@ -87,6 +87,17 @@ Without this step every redeploy would wipe the data.
 Checks**: a Readiness probe and a Liveness probe, both HTTP GET on
 `/v1/health`, port 8080. Add.
 
+**3B.5 The route's time limit.** At the top of the left menu switch from
+**Developer** to **Administrator**, then **Networking** → **Routes** →
+`dlc-proxy` → **Actions** → **Edit annotations** → add the key
+`haproxy.router.openshift.io/timeout` with the value `240s` → Save. It
+takes effect in seconds, with no restart, and stays until the route is
+deleted. Do not skip it: by default the platform's router gives up on a
+request that is still unanswered after 30 seconds, while an AI answer may
+take up to 180. Without the annotation a slow answer fails on the
+student's side with *course server error (HTTP 504)*, although the server
+finishes the call and counts it against that student's daily limit.
+
 Your course server URL is `https://dlc-proxy-<project>.apps.cloudapps.unc.edu`.
 Write it on the card note.
 
@@ -267,7 +278,7 @@ Restart the app, or the server, after changing any of these.
 | Course token / admin token / consent-records password | server variables `DLC_COURSE_TOKEN`, `DLC_ADMIN_TOKEN`, `DLC_CONSENT_ADMIN_TOKEN`; the Secret `dlc-proxy-secrets`|
 | Where the server keeps its data | variable `DLC_PROXY_DB` (default `./dlc_proxy.db`; the container uses `/data/dlc_proxy.db` on its volume) for usage data; variable `DLC_CONSENT_DB` (default `dlc_consent.db` in the same folder) for the consent names and signatures |
 | Which model each Layer 3 mode uses | the picker on each Layer 3 board (Sonnet default or Opus, per run); the default comes from env `DLC_L3_DEBUG_MODEL` / `DLC_L3_PROPOSE_MODEL`, else `l3_debug_model` / `l3_propose_model` in `~/.dlc/config.json` |
-| LLM call timeout | env `DLC_LLM_TIMEOUT` (seconds, default 180) |
+| LLM call timeout | env `DLC_LLM_TIMEOUT` (seconds, default 180). Option B: keep the route annotation from 3B.5 at least 60 seconds above it |
 | The research study on or off | env `DLC_STUDY_ID` on the server (the IRB number; unset = no study)|
 | How often the feedback survey asks | env `DLC_SURVEY_RATE` on the server (0–1, default `0.35` in `_survey_rate()` in `proxy/dlc_proxy.py`); the first-time rule, the 20-minute gap, the 2-per-session cap and the half rate for Layer 1 and the walkthrough are the constants at the top of `dlc/web/static/consent.js` |
 | Lecture list Layer 2 cites | `SYLLABUS_311` in `dlc/llm/explain.py` (A.3) |
@@ -352,8 +363,12 @@ must fail, which proves nobody reaches the AI without the real URL.
   the cluster is idling the app.
 - **Students get *can't be reached*.** They pasted `http://`, a port, or
   `/admin/view` on the end. The URL is the bare `https://…` host.
+- **A slow AI answer fails with *course server error (HTTP 504)* after
+  about 30 seconds**, although the server finishes the call and counts it.
+  The route's timeout annotation from 3B.5 is missing. Add it; nothing
+  needs a restart.
 - **No Dockerfile choice in Import Strategy.** The cluster forbids
   Dockerfile builds; ask its admins, or use Option A.
 - **The project is gone.** Deleting the project deletes the server, the
   Secret, the volume and the data, and you cannot create a new one. Ask
-  CloudApps support to restore it, then do 3B.1 to 3B.4 again.
+  CloudApps support to restore it, then do 3B.1 to 3B.5 again.
