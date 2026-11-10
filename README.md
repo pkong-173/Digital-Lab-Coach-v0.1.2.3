@@ -105,8 +105,11 @@ This process begins if and only if admin gains IRB permission from the departmen
 When the course server declares a study, DLC asks each student once, on the
 first start after connecting, with the UNC information sheet
 (`data/consent/COMP311_fa26.md`). Only machines whose student agreed ever send
-events; a declined machine records nothing at all. A short optional feedback
-question follows some coach answers on agreed machines.
+events; a declined machine records nothing for the study. The course server
+counts every machine's AI requests under its hashed id to apply the daily
+limits, and keeps the AI's answers only for machines that agreed. Typed names
+and signatures are stored in a separate file from the usage data. A short
+optional feedback question follows some coach answers on agreed machines.
 The first round of experimental use is planned to be shut down around December.
 
 When instructor's proxy server shuts down, DLC's AI features will be offline regardless

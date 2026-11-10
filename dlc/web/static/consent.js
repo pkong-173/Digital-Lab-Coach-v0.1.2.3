@@ -158,7 +158,7 @@ window.dlcFirstRun = new Promise((resolve) => { window.__dlcFirstRunDone = resol
       };
       yes.addEventListener("click", () => send("agreed"));
       gate.querySelector("#dlc-consent-decline").addEventListener("click", () => {
-        if (!confirm("Decline the research study? DLC keeps working with every feature and records nothing about your use. This answer is final in the tool.")) return;
+        if (!confirm("Decline the research study? DLC keeps working with every feature and records nothing about your use for the study. The course server only counts AI requests per computer to apply the daily limit.")) return;
         send("declined");
       });
     });
@@ -208,7 +208,7 @@ window.dlcFirstRun = new Promise((resolve) => { window.__dlcFirstRunDone = resol
       state.textContent = `taking part in study ${st.study_id}${st.name ? ", signed " + st.name : ""}${when ? ", " + when : ""}`;
       state.classList.remove("settings-bad");
     } else if (st.decision === "declined") {
-      state.textContent = `declined${when ? " on " + when : ""} — nothing is recorded`;
+      state.textContent = `declined${when ? " on " + when : ""} - nothing is recorded for the study`;
       state.classList.remove("settings-bad");
     } else {
       state.textContent = `study ${st.study_id} is on — the sheet appears on the next start`;
