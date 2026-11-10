@@ -37,15 +37,18 @@ Two ways, both in the instructor guide
 |---|---|
 | `ANTHROPIC_API_KEY` | the key the relay uses; no endpoint ever returns it |
 | `DLC_COURSE_TOKEN` | what students paste. Unset, the proxy refuses every `/v1/llm` and `/v1/events` request (503) |
-| `DLC_ADMIN_TOKEN` | opens `/admin/*`. Unset, every admin request is refused |
+| `DLC_ADMIN_TOKEN` | opens the usage data under `/admin/*`; Unset, every admin request is refused |
+| `DLC_CONSENT_ADMIN_TOKEN` | opens the consent records (typed names, signatures); It must differ from the admin token. Unset, nobody can download them |
 | `DLC_PROXY_DB` | the SQLite ledger (default `./dlc_proxy.db`; the container sets `/data/dlc_proxy.db`); keep it outside the repo |
+| `DLC_CONSENT_DB` | the linkage file with the typed names and signatures (default `dlc_consent.db` next to the ledger). The ledger keeps each machine's decision by hashed id only |
 | `DLC_STUDY_ID` | the IRB study number, e.g. `26-2770`. Set, the tool shows the consent sheet once per machine and events ship only from machines that agreed; unset, nobody is asked and nothing ships |
 | `DLC_SURVEY_RATE` | chance (0–1, default `0.35`) that a one-question feedback survey follows a coach answer on an agreed machine, after each feature's first time; `1` for testing |
 | `DLC_TIMEZONE` | the course time zone (default `America/New_York`) |
 
 `GET /v1/health` reports `course_token_set`, `admin_token_set`,
 `key_configured` and `key_format_ok`; all four must read `true` before
-class. It also carries `study_id` and `survey_rate`, which the tool reads to
+class. `consent_token_set` says whether the consent records can be
+downloaded and `consent_db_path` names the linkage file. It also carries `study_id` and `survey_rate`, which the tool reads to
 decide whether to ask for consent. Students paste the course server URL -
 `http://<proxy machine's LAN address>:8321` under Option A,
 `https://dlc-proxy-<project>.apps.cloudapps.unc.edu` under Option B - plus
@@ -56,12 +59,13 @@ the course token under Settings → Course server; the tool stores them in
 
 | Route | What |
 |---|---|
-| `POST /v1/llm` | LLM relay (course-token gated): checks the machine's daily budget, attaches your key, forwards through the same client wrapper the tool uses, logs usage. With no key on the proxy it answers "no API key configured — tell your instructor" and spends nothing. |
+| `POST /v1/llm` | LLM relay (course-token gated): checks the machine's daily budget, attaches your key, forwards through the same client wrapper the tool uses, logs usage. Every call is counted per machine for the limits; the model's answer text is stored only for a machine whose latest consent decision is agreed. With no key on the proxy it answers "no API key configured - tell your instructor" and spends nothing. |
 | `POST /v1/events` | Telemetry batch ingest, deduped on (machine, row id); stamps each machine's authoritative first-seen date. |
-| `POST /v1/consent` | Stores a machine's consent decision: install id, sheet version, agreed or declined, typed name, drawn signature. A declined decision deletes that machine's events. |
+| `POST /v1/consent` | Stores a machine's consent decision by install id in the ledger, and the record itself (typed name, drawn signature) in the linkage file. |
 | `GET /v1/health` | Liveness, counts, the four configuration flags above, `study_id` and `survey_rate`. |
-| `GET /admin/view` | The dashboard; asks for the admin token once. Its JSON feeds are `/admin/summary`, `/admin/daily`, `/admin/events`, `/admin/llm_texts`, `/admin/stats`, `/admin/research` (`?token=…` or header `X-DLC-Admin-Token`). |
-| `GET /admin/signatures.zip` | Every drawn signature as `sig_<id>.png`, the names `consents.csv` refers to, plus `index.csv`. |
+| `GET /admin/view` | The dashboard; asks for the admin token once. Its JSON feeds are `/admin/summary`, `/admin/daily`, `/admin/events`, `/admin/llm_texts`, `/admin/stats`, `/admin/research` (header `X-DLC-Admin-Token`). |
+| `GET /admin/consent_records.csv` | Every decision with the typed name, from the linkage file. Like the next two it opens with the consent-records password (header `X-DLC-Consent-Token`). |
+| `GET /admin/signatures.zip` | Every drawn signature as `sig_<id>.png`, the names `consent_records.csv` refers to, plus `index.csv`. |
 | `GET /admin/consents.html` | A printable consent log: every decision with the typed name and the signature inline. |
 
 ## Notes
@@ -71,11 +75,16 @@ the course token under Settings → Course server; the tool stores them in
   `DLC_GLOBAL_DAILY_CALLS` (600) and `DLC_GLOBAL_DAILY_USD` (20) in the
   environment. The README's *Changing the limits* section shows all three
   layers side by side.
-- Storage is one SQLite file — back it up by copying it, or by the CSV
-  exports. Under Option B it sits on the volume, which survives restarts,
-  redeploys and rebuilds; only deleting the volume claim removes it. The
-  release zip never includes `.db` files, but keep the ledger outside the
-  repo anyway.
+- Storage is two SQLite files: the ledger (usage data, decisions by
+  hashed id) and the linkage file (consent names and signatures). Back
+  them up by copying them, and keep the two copies apart. Under Option B
+  both sit on the volume, which survives restarts, redeploys and
+  rebuilds; only deleting the volume claim removes them. Keep both outside
+  of repo anyway.
+- A ledger written by an older version is converted on the first start:
+  names and signatures move to the linkage file, and answer texts of
+  machines without an agreed decision are removed. The start-up log says
+  how many of each.
 - HTTPS: Option B gives it to you — the route terminates TLS at the
   cluster edge with a valid certificate, so tokens never travel in the
   clear. Plain HTTP is fine for the Option A second-computer smoke test on

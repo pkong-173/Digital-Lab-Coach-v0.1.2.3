@@ -14,6 +14,7 @@ import json
 import os
 import re
 import sqlite3
+import threading
 import time
 import zipfile
 from datetime import date, datetime, timezone
@@ -30,6 +31,7 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def _lifespan(app):
     _startup_sanity()
+    _db().close()
     yield
 
 
@@ -100,25 +102,56 @@ CREATE INDEX IF NOT EXISTS idx_llm_budget ON llm_calls(install_id, feature, day)
 """
 
 
+def _db_path() -> Path:
+    return Path(os.environ.get("DLC_PROXY_DB", "dlc_proxy.db"))
+
+
 def _db() -> sqlite3.Connection:
-    p = Path(os.environ.get("DLC_PROXY_DB", "dlc_proxy.db"))
+    p = _db_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(p))
+    conn.execute("PRAGMA secure_delete = ON")
     conn.executescript(_SCHEMA)
     try:
         conn.execute("ALTER TABLE llm_calls ADD COLUMN response TEXT")
     except sqlite3.OperationalError:
         pass
     _migrate_events_key(conn)
+    _migrate_consent_records(conn)
     conn.executescript(_CONSENT_SCHEMA)
+    _drop_unconsented_answers_once(conn, p)
     return conn
 
 
-# Research consent records live in their own table: the typed name and the
-# drawn signature sit here and nowhere else; the usage data in `events` only
-# ever carries the hashed install id (the study code).
+# Identifiers are kept apart from the research data.
+#
+# The research database (DLC_PROXY_DB) holds the usage data and, in
+# `consents`, each machine's decision by hashed install id: no name and no
+# signature. The server needs that yes/no next to the usage data to decide
+# what it may keep for a machine.
+#
+# The linkage file (DLC_CONSENT_DB) holds the consent records themselves:
+# the typed name and the drawn signature with the install id they belong to.
+# It opens with its own password (DLC_CONSENT_ADMIN_TOKEN), never with the
+# admin token.
 _CONSENT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS consents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    install_id TEXT NOT NULL,
+    study_id TEXT,
+    version TEXT,
+    decision TEXT NOT NULL,
+    has_signature INTEGER NOT NULL DEFAULT 0,
+    app_version TEXT,
+    decided_at REAL,
+    received_at REAL NOT NULL,
+    UNIQUE(install_id, version, decision, decided_at)
+);
+CREATE INDEX IF NOT EXISTS idx_consent_machine ON consents(install_id);
+"""
+
+_LINKAGE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS consent_records (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     install_id TEXT NOT NULL,
     study_id TEXT,
@@ -131,8 +164,150 @@ CREATE TABLE IF NOT EXISTS consents (
     received_at REAL NOT NULL,
     UNIQUE(install_id, version, decision, decided_at)
 );
-CREATE INDEX IF NOT EXISTS idx_consent_machine ON consents(install_id);
+CREATE INDEX IF NOT EXISTS idx_record_machine ON consent_records(install_id);
 """
+
+_RECORD_COLS = ("install_id, study_id, version, decision, name, signature,"
+                " app_version, decided_at, received_at")
+
+# machines whose LATEST consent decision is "agreed"
+_AGREED_SQL = (
+    "SELECT c.install_id FROM consents c WHERE c.decision = 'agreed'"
+    " AND NOT EXISTS (SELECT 1 FROM consents d"
+    " WHERE d.install_id = c.install_id"
+    " AND (COALESCE(d.decided_at, d.received_at)"
+    " > COALESCE(c.decided_at, c.received_at)"
+    " OR (COALESCE(d.decided_at, d.received_at)"
+    " = COALESCE(c.decided_at, c.received_at) AND d.id > c.id)))")
+
+_MIGRATE_LOCK = threading.Lock()
+_ANSWERS_CHECKED: set[str] = set()
+
+
+def _consent_db_path() -> Path:
+    env = os.environ.get("DLC_CONSENT_DB", "").strip()
+    return Path(env) if env else _db_path().with_name("dlc_consent.db")
+
+
+def _consent_db() -> sqlite3.Connection:
+    p = _consent_db_path()
+    if p.resolve() == _db_path().resolve():
+        raise RuntimeError("DLC_CONSENT_DB must be a different file from"
+                           " DLC_PROXY_DB: names stay apart from usage data")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(p))
+    conn.execute("PRAGMA secure_delete = ON")
+    conn.executescript(_LINKAGE_SCHEMA)
+    return conn
+
+
+def _latest_decision(conn: sqlite3.Connection, install_id: str) -> str | None:
+    row = conn.execute(
+        "SELECT decision FROM consents WHERE install_id = ?"
+        " ORDER BY COALESCE(decided_at, received_at) DESC, id DESC LIMIT 1",
+        (install_id,)).fetchone()
+    return row[0] if row else None
+
+
+def _record_exists(ccon: sqlite3.Connection, rec: tuple) -> bool:
+    iid, _sid, ver, dec, _name, _sig, _app, dat, _rec = rec
+    return ccon.execute(
+        "SELECT 1 FROM consent_records WHERE install_id = ? AND version IS ?"
+        " AND decision = ? AND decided_at IS ?",
+        (iid, ver, dec, dat)).fetchone() is not None
+
+
+def _migrate_consent_records(conn: sqlite3.Connection) -> None:
+    """A database written before the linkage file existed keeps names and
+    signatures in `consents`. Copy every record to the linkage file, check
+    the copy, then rebuild `consents` without those two columns."""
+    def old_format() -> bool:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(consents)")]
+        return "name" in cols or "signature" in cols
+    if not old_format():
+        return
+    with _MIGRATE_LOCK:
+        if not old_format():
+            return
+        rows = conn.execute("SELECT id, " + _RECORD_COLS
+                            + " FROM consents ORDER BY id").fetchall()
+        ccon = _consent_db()
+        try:
+            with ccon:
+                for row in rows:
+                    if _record_exists(ccon, row[1:]):
+                        continue
+                    cur = ccon.execute(
+                        "INSERT OR IGNORE INTO consent_records (id, "
+                        + _RECORD_COLS + ") VALUES (?,?,?,?,?,?,?,?,?,?)", row)
+                    if cur.rowcount == 0:
+                        ccon.execute(
+                            "INSERT INTO consent_records (" + _RECORD_COLS
+                            + ") VALUES (?,?,?,?,?,?,?,?,?)", row[1:])
+            missing = [r[0] for r in rows if not _record_exists(ccon, r[1:])]
+        finally:
+            ccon.close()
+        if missing:
+            raise RuntimeError(
+                "consent records could not be copied to the linkage file;"
+                " the research database was left untouched")
+        conn.commit()
+        conn.executescript("""
+BEGIN IMMEDIATE;
+CREATE TABLE consents_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    install_id TEXT NOT NULL,
+    study_id TEXT,
+    version TEXT,
+    decision TEXT NOT NULL,
+    has_signature INTEGER NOT NULL DEFAULT 0,
+    app_version TEXT,
+    decided_at REAL,
+    received_at REAL NOT NULL,
+    UNIQUE(install_id, version, decision, decided_at)
+);
+INSERT INTO consents_new (id, install_id, study_id, version, decision,
+                          has_signature, app_version, decided_at, received_at)
+    SELECT id, install_id, study_id, version, decision,
+           CASE WHEN signature IS NOT NULL AND signature != '' THEN 1 ELSE 0 END,
+           app_version, decided_at, received_at
+    FROM consents;
+DROP TABLE consents;
+ALTER TABLE consents_new RENAME TO consents;
+CREATE INDEX IF NOT EXISTS idx_consent_machine ON consents(install_id);
+COMMIT;
+""")
+        try:
+            conn.execute("VACUUM")
+        except sqlite3.OperationalError:
+            pass
+        print(f"INFO: moved {len(rows)} consent record(s) to the linkage file;"
+              " the research database no longer holds names or signatures.")
+
+
+def _drop_unconsented_answers_once(conn: sqlite3.Connection, path: Path) -> None:
+    """The model's answer text is kept only for machines whose latest consent
+    decision is "agreed". A database written by an older version may hold
+    answers of other machines: blank them, once per process."""
+    key = str(path.resolve())
+    if key in _ANSWERS_CHECKED:
+        return
+    with _MIGRATE_LOCK:
+        if key in _ANSWERS_CHECKED:
+            return
+        with conn:
+            n = conn.execute(
+                "UPDATE llm_calls SET response = NULL"
+                " WHERE response IS NOT NULL"
+                " AND install_id NOT IN (" + _AGREED_SQL + ")").rowcount
+        _ANSWERS_CHECKED.add(key)
+        if n:
+            try:
+                conn.execute("VACUUM")
+            except sqlite3.OperationalError:
+                pass
+            print(f"INFO: removed the stored AI answer text of {n} call(s) from"
+                  " machines without an agreed consent decision.")
 
 
 def _study_id() -> str | None:
@@ -189,11 +364,28 @@ def _check_course_token(tok: str | None) -> None:
         raise HTTPException(status_code=401, detail="bad course token")
 
 
-def _check_admin(token: str | None, header_token: str | None = None) -> None:
+def _check_admin(header_token: str | None) -> None:
+    """The admin token is read from the X-DLC-Admin-Token header only: a
+    token in the web address would land in server logs and browser history."""
     want = os.environ.get("DLC_ADMIN_TOKEN")
-    got = header_token or token or ""
-    if not want or got != want:
+    if not want or (header_token or "") != want:
         raise HTTPException(status_code=401, detail="bad admin token")
+
+
+def _consent_token() -> str | None:
+    """The consent-records password which must not be the admin token."""
+    want = os.environ.get("DLC_CONSENT_ADMIN_TOKEN", "").strip()
+    if not want or want == os.environ.get("DLC_ADMIN_TOKEN", ""):
+        return None
+    return want
+
+
+def _check_consent_admin(header_token: str | None) -> None:
+    """Names and signatures open with their own password."""
+    want = _consent_token()
+    if not want or (header_token or "") != want:
+        raise HTTPException(status_code=401,
+                            detail="bad consent-records token")
 
 
 def _est_usd(conn, day: str | None = None) -> float:
@@ -303,27 +495,45 @@ def consent_ingest(req: ConsentIn,
                             or not sig.startswith("data:image/png;base64,")
                             or len(sig) > 400_000):
         sig = None
+    agreed = req.decision == "agreed"
+    name = (req.name or "").strip()[:120] if agreed else ""
+    sig = sig if agreed else None
+    decided_at = req.decided_at if req.decided_at is not None else time.time()
+    now = time.time()
+    # linkage file
+    ccon = _consent_db()
+    try:
+        with ccon:
+            ccon.execute(
+                "INSERT OR IGNORE INTO consent_records (" + _RECORD_COLS
+                + ") VALUES (?,?,?,?,?,?,?,?,?)",
+                (req.install_id, req.study_id, req.version, req.decision,
+                 name, sig, req.app_version, decided_at, now))
+    finally:
+        ccon.close()
     conn = _db()
     try:
         _touch_machine(conn, req.install_id, None, None, req.app_version)
-        removed = 0
+        removed = answers = 0
         with conn:
             cur = conn.execute(
                 "INSERT OR IGNORE INTO consents (install_id, study_id, version,"
-                " decision, name, signature, app_version, decided_at, received_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?)",
+                " decision, has_signature, app_version, decided_at, received_at)"
+                " VALUES (?,?,?,?,?,?,?,?)",
                 (req.install_id, req.study_id, req.version, req.decision,
-                 (req.name or "").strip()[:120] if req.decision == "agreed" else "",
-                 sig if req.decision == "agreed" else None,
-                 req.app_version,
-                 req.decided_at if req.decided_at is not None else time.time(),
-                 time.time()))
+                 1 if sig else 0, req.app_version, decided_at, now))
             stored = cur.rowcount
             if req.decision == "declined":
                 removed = conn.execute(
                     "DELETE FROM events WHERE install_id = ?",
                     (req.install_id,)).rowcount
-        return {"ok": True, "stored": int(stored), "events_removed": int(removed)}
+                answers = conn.execute(
+                    "UPDATE llm_calls SET response = NULL"
+                    " WHERE install_id = ? AND response IS NOT NULL",
+                    (req.install_id,)).rowcount
+        return {"ok": True, "stored": int(stored),
+                "events_removed": int(removed),
+                "answers_removed": int(answers)}
     finally:
         conn.close()
 
@@ -384,6 +594,7 @@ def relay(req: LlmIn,
                      effort=req.effort)
         ms = int((time.monotonic() - t0) * 1000)
         u = r.get("usage") or {}
+        keep_text = _latest_decision(conn, req.install_id) == "agreed"
         with conn:
             conn.execute(
                 "UPDATE llm_calls SET ts = ?, ok = ?, in_tokens = ?,"
@@ -392,7 +603,8 @@ def relay(req: LlmIn,
                 (time.time(), 1 if r.get("ok") else 0,
                  u.get("input_tokens"), u.get("output_tokens"), ms,
                  (r.get("error") or "")[:300] or None,
-                 (r.get("text") or "")[:20000] or None, row_id))
+                 ((r.get("text") or "")[:20000] or None) if keep_text else None,
+                 row_id))
         r["limit"] = {"feature": req.feature, "used": used + 1,
                       "budget": budget}
         return r
@@ -408,7 +620,7 @@ def _effective_key() -> str:
 def _startup_sanity() -> None:
     key = _effective_key()
     if not key:
-        print("WARNING: no API key — set ANTHROPIC_API_KEY in this terminal"
+        print("WARNING: no API key - set ANTHROPIC_API_KEY in this terminal"
               " window and start the proxy again. Until then every AI"
               " request answers 'the course server has no API key'.")
     elif not key.startswith("sk-"):
@@ -416,12 +628,16 @@ def _startup_sanity() -> None:
               " (expected it to start with 'sk-'). LLM relays will fail"
               " with 401 until it is fixed.")
     if not os.environ.get("DLC_COURSE_TOKEN"):
-        print("WARNING: DLC_COURSE_TOKEN is not set — every student request"
+        print("WARNING: DLC_COURSE_TOKEN is not set - every student request"
               " is refused (503) until it is. Set it in THIS terminal window"
               " and start the proxy again.")
     if not os.environ.get("DLC_ADMIN_TOKEN"):
-        print("WARNING: DLC_ADMIN_TOKEN is not set — the admin dashboard"
+        print("WARNING: DLC_ADMIN_TOKEN is not set - the admin dashboard"
               " rejects every token until it is.")
+    if not _consent_token():
+        print("WARNING: DLC_CONSENT_ADMIN_TOKEN is not set (or equals the"
+              " admin token) - the consent records (typed names, signatures)"
+              " cannot be downloaded until it is. Students are not affected.")
 
 
 @app.get("/v1/health")
@@ -443,6 +659,8 @@ def health() -> dict:
                 "key_format_ok": key.startswith("sk-") if key else False,
                 "course_token_set": bool(os.environ.get("DLC_COURSE_TOKEN")),
                 "admin_token_set": bool(os.environ.get("DLC_ADMIN_TOKEN")),
+                "consent_token_set": bool(_consent_token()),
+                "consent_db_path": str(_consent_db_path().resolve()),
                 "today_calls": day_calls,
                 "today_est_usd": round(_est_usd(conn, day), 2),
                 "global_daily_calls": _global_daily_calls(),
@@ -454,9 +672,8 @@ def health() -> dict:
 
 
 @app.get("/admin/summary")
-def summary(token: str | None = Query(default=None),
-            x_dlc_admin_token: str | None = Header(default=None)) -> dict:
-    _check_admin(token, x_dlc_admin_token)
+def summary(x_dlc_admin_token: str | None = Header(default=None)) -> dict:
+    _check_admin(x_dlc_admin_token)
     conn = _db()
     try:
         machines = [dict(zip(
@@ -493,9 +710,8 @@ def summary(token: str | None = Query(default=None),
 
 
 @app.get("/admin/daily")
-def daily(token: str | None = Query(default=None),
-          x_dlc_admin_token: str | None = Header(default=None)) -> dict:
-    _check_admin(token, x_dlc_admin_token)
+def daily(x_dlc_admin_token: str | None = Header(default=None)) -> dict:
+    _check_admin(x_dlc_admin_token)
     conn = _db()
     try:
         llm = [dict(zip(("day", "install_id", "feature", "calls",
@@ -530,14 +746,13 @@ def daily(token: str | None = Query(default=None),
 
 
 @app.get("/admin/events")
-def admin_events(token: str | None = Query(default=None),
-                 x_dlc_admin_token: str | None = Header(default=None),
+def admin_events(x_dlc_admin_token: str | None = Header(default=None),
                  day: str | None = Query(default=None),
                  install_id: str | None = Query(default=None),
                  kind: str | None = Query(default=None),
                  page: int = Query(default=1, ge=1),
                  per_page: int = Query(default=50, ge=1, le=200)) -> dict:
-    _check_admin(token, x_dlc_admin_token)
+    _check_admin(x_dlc_admin_token)
     conn = _db()
     try:
         where, args = [], []
@@ -582,15 +797,14 @@ def admin_events(token: str | None = Query(default=None),
 
 
 @app.get("/admin/llm_texts")
-def admin_llm_texts(token: str | None = Query(default=None),
-                    x_dlc_admin_token: str | None = Header(default=None),
+def admin_llm_texts(x_dlc_admin_token: str | None = Header(default=None),
                     day: str | None = Query(default=None),
                     install_id: str | None = Query(default=None),
                     feature: str | None = Query(default=None),
                     page: int = Query(default=1, ge=1),
                     per_page: int = Query(default=20, ge=1,
                                           le=100)) -> dict:
-    _check_admin(token, x_dlc_admin_token)
+    _check_admin(x_dlc_admin_token)
     conn = _db()
     try:
         where, args = ["response IS NOT NULL"], []
@@ -618,13 +832,14 @@ def admin_llm_texts(token: str | None = Query(default=None),
         for r in rows:
             r["time"] = _fmt_time(r.pop("ts"))
         days = [d for (d,) in conn.execute(
-            "SELECT DISTINCT day FROM llm_calls ORDER BY 1 DESC"
-            " LIMIT 120")]
+            "SELECT DISTINCT day FROM llm_calls WHERE response IS NOT NULL"
+            " ORDER BY 1 DESC LIMIT 120")]
         features = [f for (f,) in conn.execute(
-            "SELECT DISTINCT feature FROM llm_calls ORDER BY 1")]
+            "SELECT DISTINCT feature FROM llm_calls"
+            " WHERE response IS NOT NULL ORDER BY 1")]
         machines = [m for (m,) in conn.execute(
-            "SELECT DISTINCT install_id FROM llm_calls ORDER BY 1"
-            " LIMIT 200")]
+            "SELECT DISTINCT install_id FROM llm_calls"
+            " WHERE response IS NOT NULL ORDER BY 1 LIMIT 200")]
         return {"total": total, "page": page, "per_page": per_page,
                 "rows": rows, "days": days, "features": features,
                 "machines": machines}
@@ -633,11 +848,10 @@ def admin_llm_texts(token: str | None = Query(default=None),
 
 
 @app.get("/admin/stats")
-def admin_stats(token: str | None = Query(default=None),
-                x_dlc_admin_token: str | None = Header(default=None),
+def admin_stats(x_dlc_admin_token: str | None = Header(default=None),
                 range_days: int = Query(default=7, ge=1,
                                         le=366)) -> dict:
-    _check_admin(token, x_dlc_admin_token)
+    _check_admin(x_dlc_admin_token)
     from datetime import timedelta
     since = (_today() - timedelta(days=range_days - 1)).isoformat()
     conn = _db()
@@ -807,16 +1021,16 @@ def _est_usd_since(conn, since: str) -> float:
 
 
 @app.get("/admin/research")
-def admin_research(token: str | None = Query(default=None),
-                   x_dlc_admin_token: str | None = Header(default=None)) -> dict:
-    _check_admin(token, x_dlc_admin_token)
+def admin_research(x_dlc_admin_token: str | None = Header(default=None)) -> dict:
+    _check_admin(x_dlc_admin_token)
     conn = _db()
     try:
         latest: dict[str, dict] = {}
         for iid, sid, ver, dec, has_sig, dat, ver_app in conn.execute(
                 "SELECT install_id, study_id, version, decision,"
-                " signature IS NOT NULL, decided_at, app_version"
-                " FROM consents ORDER BY COALESCE(decided_at, received_at)"):
+                " has_signature, decided_at, app_version"
+                " FROM consents"
+                " ORDER BY COALESCE(decided_at, received_at), id"):
             latest[iid] = {"install_id": iid, "study_id": sid, "version": ver,
                            "decision": dec, "has_signature": bool(has_sig),
                            "decided_at": dat, "app_version": ver_app}
@@ -876,14 +1090,12 @@ _TIME_COLS = {"ts", "client_ts", "stored_at", "received_at", "decided_at",
 _EXPORT_SQL = {
     "events": "SELECT * FROM events ORDER BY id",
     "machines": "SELECT * FROM machines ORDER BY first_seen",
-    "llm_calls": "SELECT * FROM llm_calls ORDER BY id",
-    # the drawn signature is not a CSV cell (Excel cuts cells at 32k
-    # characters): the column names the PNG inside signatures.zip instead
+    "llm_calls": ("SELECT * FROM llm_calls WHERE install_id IN ("
+                  + _AGREED_SQL + ") ORDER BY id"),
     "consents": (
         "SELECT id, install_id, study_id, version AS sheet_version, decision,"
-        " name, CASE WHEN signature IS NOT NULL AND signature != ''"
-        " THEN 'sig_' || id || '.png' ELSE '' END AS signature_png,"
-        " app_version, decided_at, received_at FROM consents ORDER BY id"),
+        " has_signature, app_version, decided_at, received_at"
+        " FROM consents ORDER BY id"),
     "surveys": (
         "SELECT install_id, COALESCE(client_ts, received_at) AS ts,"
         " json_extract(props, '$.feature') AS feature,"
@@ -959,10 +1171,9 @@ def _signature_png(data_url) -> bytes | None:
 
 
 @app.get("/admin/export.csv")
-def export_csv(token: str | None = Query(default=None),
-               x_dlc_admin_token: str | None = Header(default=None),
+def export_csv(x_dlc_admin_token: str | None = Header(default=None),
                table: str = Query(default="events")) -> Response:
-    _check_admin(token, x_dlc_admin_token)
+    _check_admin(x_dlc_admin_token)
     sql = _EXPORT_SQL.get(table)
     if sql is None:
         raise HTTPException(status_code=400, detail="unknown table")
@@ -980,21 +1191,44 @@ def export_csv(token: str | None = Query(default=None),
         conn.close()
 
 
+@app.get("/admin/consent_records.csv")
+def admin_consent_records_csv(
+        x_dlc_consent_token: str | None = Header(default=None)) -> Response:
+    """Every decision with the typed name from the linkage file."""
+    _check_consent_admin(x_dlc_consent_token)
+    conn = _consent_db()
+    try:
+        cur = conn.execute(
+            "SELECT id, install_id, study_id, version AS sheet_version,"
+            " decision, name, CASE WHEN signature IS NOT NULL"
+            " AND signature != '' THEN 'sig_' || id || '.png' ELSE '' END"
+            " AS signature_png, app_version, decided_at, received_at"
+            " FROM consent_records ORDER BY id")
+        cols = [d[0] for d in cur.description]
+        lines = [",".join(cols)]
+        for row in cur:
+            lines.append(",".join(
+                _csv_cell(_fmt_time(v) if col in _TIME_COLS else v)
+                for col, v in zip(cols, row)))
+        return _csv_download("consent_records.csv", lines)
+    finally:
+        conn.close()
+
+
 @app.get("/admin/signatures.zip")
-def admin_signatures_zip(token: str | None = Query(default=None),
-                         x_dlc_admin_token: str | None = Header(default=None)
+def admin_signatures_zip(x_dlc_consent_token: str | None = Header(default=None)
                          ) -> Response:
-    """Every drawn signature as sig_<id>.png (the names consents.csv uses)
-    plus index.csv: id, install_id, name, decided_at, file."""
-    _check_admin(token, x_dlc_admin_token)
+    """Every drawn signature as sig_<id>.png (the names consent_records.csv
+    uses) plus index.csv: id, install_id, name, decided_at, file."""
+    _check_consent_admin(x_dlc_consent_token)
     buf = io.BytesIO()
     index = ["id,install_id,name,decided_at,file"]
-    conn = _db()
+    conn = _consent_db()
     try:
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             for cid, iid, name, sig, dat in conn.execute(
                     "SELECT id, install_id, name, signature, decided_at"
-                    " FROM consents WHERE signature IS NOT NULL"
+                    " FROM consent_records WHERE signature IS NOT NULL"
                     " AND signature != '' ORDER BY id"):
                 png = _signature_png(sig)
                 if png is None:
@@ -1040,17 +1274,15 @@ __ROWS__
 
 
 @app.get("/admin/consents.html", response_class=HTMLResponse)
-def admin_consent_log(token: str | None = Query(default=None),
-                      x_dlc_admin_token: str | None = Header(default=None)
+def admin_consent_log(x_dlc_consent_token: str | None = Header(default=None)
                       ) -> str:
-    """A printable consent log for the study records: every decision with
-    the typed name and the drawn signature inline. Print it to PDF."""
-    _check_admin(token, x_dlc_admin_token)
-    conn = _db()
+    """A printable consent log for the study records."""
+    _check_consent_admin(x_dlc_consent_token)
+    conn = _consent_db()
     try:
         rows = conn.execute(
             "SELECT id, install_id, version, decision, name, signature,"
-            " app_version, decided_at, received_at FROM consents"
+            " app_version, decided_at, received_at FROM consent_records"
             " ORDER BY COALESCE(decided_at, received_at), id").fetchall()
     finally:
         conn.close()
@@ -1239,16 +1471,22 @@ _ADMIN_PAGE = """<!doctype html>
        <div class="tiles" id="rs-survey" style="margin-bottom:8px"></div>
        <div id="rs-comments"></div></div>
      <div class="cardbox"><h2 style="margin-top:0">Consent decisions
-       <span class="muted" style="font-weight:normal">— latest per machine; typed names and signatures are only in the downloads below</span></h2>
+       <span class="muted" style="font-weight:normal">— latest per machine, by hashed code; no names are kept with the usage data</span></h2>
        <div id="rs-consents"></div>
        <div class="xbtns">
-         <button id="rs-x-consents">&#11015; consents.csv</button>
-         <button id="rs-x-sigs">&#11015; signatures.zip</button>
-         <button id="rs-x-log">consent log (print / PDF)</button>
+         <button id="rs-x-consents">&#11015; decisions.csv</button>
          <button id="rs-x-surveys">&#11015; surveys.csv</button>
        </div>
-       <p class="muted" style="margin:8px 0 0">consents.csv: every decision with the typed name; its <code>signature_png</code> column names the drawing inside signatures.zip.
-         The consent log shows the same rows with the signatures inline, ready to print. surveys.csv: one row per answered survey; blank cells mean that question was not part of it. Times are in the course time zone (DLC_TIMEZONE, default America/New_York).</p></div>
+       <p class="muted" style="margin:8px 0 0">decisions.csv: every decision by hashed machine code, without names. surveys.csv: one row per answered survey; blank cells mean that question was not part of it. Times are in the course time zone (DLC_TIMEZONE, default America/New_York).</p></div>
+     <div class="cardbox"><h2 style="margin-top:0">Consent records
+       <span class="muted" style="font-weight:normal">— typed names and signatures, kept in a separate file from the usage data</span></h2>
+       <div class="xbtns">
+         <input id="rs-ctok" type="password" autocomplete="off" placeholder="consent-records password" style="padding:6px 8px;min-width:210px">
+         <button id="rs-x-records">&#11015; consent_records.csv</button>
+         <button id="rs-x-sigs">&#11015; signatures.zip</button>
+         <button id="rs-x-log">&#11015; consent log (open it, then print / PDF)</button>
+       </div>
+       <p class="muted" style="margin:8px 0 0">These three open with the consent-records password (DLC_CONSENT_ADMIN_TOKEN), not with the admin token; this page never stores it. consent_records.csv: every decision with the typed name; its <code>signature_png</code> column names the drawing inside signatures.zip. The consent log shows the same rows with the signatures inline.</p></div>
    </section>
  </div>
 </main>
@@ -1607,18 +1845,30 @@ async function loadResearch(){
         sheet:esc(r.version||""),signature:r.has_signature?"drawn":"typed only",app:esc(r.app_version||"")})),
         ["machine","decision","when","sheet","signature","app"])
     :`<p class="muted">no decisions recorded yet</p>`;
-  $("rs-x-consents").onclick=()=>download("/admin/export.csv?table=consents","consents.csv");
+  $("rs-x-consents").onclick=()=>download("/admin/export.csv?table=consents","decisions.csv");
   $("rs-x-surveys").onclick=()=>download("/admin/export.csv?table=surveys","surveys.csv");
-  $("rs-x-sigs").onclick=()=>download("/admin/signatures.zip","signatures.zip");
-  $("rs-x-log").onclick=()=>window.open("/admin/consents.html?token="+encodeURIComponent(tok()),"_blank");
+  $("rs-x-records").onclick=()=>downloadRecords("/admin/consent_records.csv","consent_records.csv");
+  $("rs-x-sigs").onclick=()=>downloadRecords("/admin/signatures.zip","signatures.zip");
+  $("rs-x-log").onclick=()=>downloadRecords("/admin/consents.html","consent_log.html");
+}
+function saveBlob(blob,filename){
+  const u=URL.createObjectURL(blob);
+  const a=document.createElement("a");a.href=u;a.download=filename;
+  document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(u),10000);
 }
 async function download(path,filename){
   const r=await fetch(path,{headers:{"X-DLC-Admin-Token":tok()}});
   if(!r.ok){alert("download failed: HTTP "+r.status);return}
-  const u=URL.createObjectURL(await r.blob());
-  const a=document.createElement("a");a.href=u;a.download=filename;
-  document.body.appendChild(a);a.click();a.remove();
-  setTimeout(()=>URL.revokeObjectURL(u),10000);
+  saveBlob(await r.blob(),filename);
+}
+async function downloadRecords(path,filename){
+  const t=$("rs-ctok").value;
+  if(!t){alert("Type the consent-records password first.");return}
+  const r=await fetch(path,{headers:{"X-DLC-Consent-Token":t}});
+  if(r.status===401){alert("That consent-records password was rejected.");return}
+  if(!r.ok){alert("download failed: HTTP "+r.status);return}
+  saveBlob(await r.blob(),filename);
 }
 function showTab(t){
   state.tab=t;

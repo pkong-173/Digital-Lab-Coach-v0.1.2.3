@@ -29,6 +29,8 @@ def tele_env(tmp_path, monkeypatch):
     monkeypatch.setenv("DLC_PROXY_TOKEN", "tok")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.delenv("DLC_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("DLC_CONSENT_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("DLC_CONSENT_DB", raising=False)
     monkeypatch.delenv("DLC_GLOBAL_DAILY_CALLS", raising=False)
     monkeypatch.delenv("DLC_GLOBAL_DAILY_USD", raising=False)
     return tmp_path
@@ -85,7 +87,7 @@ def test_proxy_ingest_dedup_and_first_seen(tele_env, monkeypatch):
     assert h["machines"] == 1 and h["events"] == 2
 
     monkeypatch.setenv("DLC_ADMIN_TOKEN", "adm")
-    s = pc.get("/admin/summary", params={"token": "adm"}).json()
+    s = pc.get("/admin/summary", headers={"X-DLC-Admin-Token": "adm"}).json()
     assert s["machines"][0]["install_id"] == "m1"
     assert s["machines"][0]["first_seen"]
     assert s["machines"][0]["issued_client"] == "2026-08-01"
@@ -564,6 +566,8 @@ def test_llm_texts_feed_stores_and_filters_responses(tele_env,
                 "usage": {"input_tokens": 9, "output_tokens": 4},
                 "stop_reason": "end_turn", "model": kw.get("model")}
     pc = _proxy_client(monkeypatch, upstream=upstream)
+    pc.post("/v1/consent", json={"install_id": "m-txt", "decision": "agreed",
+                                 "name": "Ada Lovelace", "version": "v1"})
     for feat in ("modeA", "explain", "explain"):
         pc.post("/v1/llm", json={"install_id": "m-txt", "feature": feat,
                                  "model": "claude-opus-5", "prompt": "p"})
@@ -599,6 +603,8 @@ def test_llm_response_column_migrates_old_db(tele_env, monkeypatch):
     pc = _proxy_client(monkeypatch)
     body = {"install_id": "m-old", "feature": "modeA",
             "model": "claude-opus-5", "prompt": "hi"}
+    pc.post("/v1/consent", json={"install_id": "m-old", "decision": "agreed",
+                                 "name": "Ada Lovelace", "version": "v1"})
     assert pc.post("/v1/llm", json=body).json()["ok"] is True
     monkeypatch.setenv("DLC_ADMIN_TOKEN", "adm")
     d = pc.get("/admin/llm_texts",

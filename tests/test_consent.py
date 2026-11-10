@@ -27,6 +27,8 @@ def cenv(tmp_path, monkeypatch):
     monkeypatch.delenv("DLC_STUDY_ID", raising=False)
     monkeypatch.delenv("DLC_LOCAL_STUDY_ID", raising=False)
     monkeypatch.delenv("DLC_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("DLC_CONSENT_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("DLC_CONSENT_DB", raising=False)
     return tmp_path
 
 
@@ -151,14 +153,23 @@ def test_decision_reaches_the_proxy_and_decline_withdraws_events(cenv, monkeypat
     r = ship.ship_pending()
     assert r["reason"] == "ok" and r["shipped"] >= 2
     monkeypatch.setenv("DLC_ADMIN_TOKEN", "adm")
+    monkeypatch.setenv("DLC_CONSENT_ADMIN_TOKEN", "names")
     hdr = {"X-DLC-Admin-Token": "adm"}
+    chdr = {"X-DLC-Consent-Token": "names"}
     res = pc.get("/admin/research", headers=hdr).json()
     assert res["counts"]["agreed"] == 1 and res["counts"]["declined"] == 0
     row = res["consents"][0]
     assert row["decision"] == "agreed" and row["has_signature"] is True
-    assert "name" not in row and "signature" not in row      # not on the page
+    assert "name" not in row and "signature" not in row
     r = pc.get("/admin/export.csv", headers=hdr, params={"table": "consents"})
     assert r.headers["content-disposition"] == 'attachment; filename="consents.csv"'
+    lines = r.text.lstrip("\ufeff").strip().split("\n")
+    assert lines[0] == ("id,install_id,study_id,sheet_version,decision,"
+                        "has_signature,app_version,decided_at,received_at")
+    assert lines[1].split(",")[4:6] == ["agreed", "1"]
+    assert "Ada Lovelace" not in r.text
+    r = pc.get("/admin/consent_records.csv", headers=chdr)
+    assert r.headers["content-disposition"] == 'attachment; filename="consent_records.csv"'
     lines = r.text.lstrip("\ufeff").strip().split("\n")
     assert lines[0] == ("id,install_id,study_id,sheet_version,decision,name,"
                         "signature_png,app_version,decided_at,received_at")
@@ -167,15 +178,17 @@ def test_decision_reaches_the_proxy_and_decline_withdraws_events(cenv, monkeypat
     assert re.fullmatch(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d [A-Z]{2,5}", cells[8])
     assert "base64" not in r.text
     # the drawing itself: a PNG per agreed row, plus an index
-    z = zipfile.ZipFile(io.BytesIO(pc.get("/admin/signatures.zip", headers=hdr).content))
+    z = zipfile.ZipFile(io.BytesIO(pc.get("/admin/signatures.zip", headers=chdr).content))
     assert sorted(z.namelist()) == ["index.csv", "sig_1.png"]
     assert z.read("sig_1.png").startswith(b"\x89PNG")
     assert "Ada Lovelace" in z.read("index.csv").decode("utf-8")
     # the printable log carries the name and the signature inline
-    page = pc.get("/admin/consents.html", headers=hdr).text
+    page = pc.get("/admin/consents.html", headers=chdr).text
     assert "Ada Lovelace" in page and 'src="data:image/png;base64,' in page
-    assert pc.get("/admin/consents.html").status_code == 401
-    assert pc.get("/admin/signatures.zip").status_code == 401
+    for path in ("/admin/consents.html", "/admin/signatures.zip",
+                 "/admin/consent_records.csv"):
+        assert pc.get(path).status_code == 401
+        assert pc.get(path, headers=hdr).status_code == 401   # not the admin token
     assert pc.get("/v1/health").json()["events"] >= 2
     out = consent.record("declined")
     assert out["synced"] is True
