@@ -1467,26 +1467,23 @@ _ADMIN_PAGE = """<!doctype html>
    <section id="sec-research" style="display:none">
      <div class="tiles" id="rs-tiles"></div>
      <div class="cardbox"><h2 style="margin-top:0">Feedback survey
-       <span class="muted" style="font-weight:normal">— consenting students only; each feature asks once the first time it answers, then at random</span></h2>
        <div class="tiles" id="rs-survey" style="margin-bottom:8px"></div>
        <div id="rs-comments"></div></div>
      <div class="cardbox"><h2 style="margin-top:0">Consent decisions
-       <span class="muted" style="font-weight:normal">— latest per machine, by hashed code; no names are kept with the usage data</span></h2>
+       <span class="muted" style="font-weight:normal"> - latest per machine by hashed code</span></h2>
        <div id="rs-consents"></div>
        <div class="xbtns">
          <button id="rs-x-consents">&#11015; decisions.csv</button>
          <button id="rs-x-surveys">&#11015; surveys.csv</button>
        </div>
-       <p class="muted" style="margin:8px 0 0">decisions.csv: every decision by hashed machine code, without names. surveys.csv: one row per answered survey; blank cells mean that question was not part of it. Times are in the course time zone (DLC_TIMEZONE, default America/New_York).</p></div>
+       <p class="muted" style="margin:8px 0 0">Times are in the course time zone (DLC_TIMEZONE, default America/New_York).</p></div>
      <div class="cardbox"><h2 style="margin-top:0">Consent records
-       <span class="muted" style="font-weight:normal">— typed names and signatures, kept in a separate file from the usage data</span></h2>
        <div class="xbtns">
          <input id="rs-ctok" type="password" autocomplete="off" placeholder="consent-records password" style="padding:6px 8px;min-width:210px">
          <button id="rs-x-records">&#11015; consent_records.csv</button>
          <button id="rs-x-sigs">&#11015; signatures.zip</button>
          <button id="rs-x-log">&#11015; consent log (open it, then print / PDF)</button>
        </div>
-       <p class="muted" style="margin:8px 0 0">These three open with the consent-records password (DLC_CONSENT_ADMIN_TOKEN), not with the admin token; this page never stores it. consent_records.csv: every decision with the typed name; its <code>signature_png</code> column names the drawing inside signatures.zip. The consent log shows the same rows with the signatures inline.</p></div>
    </section>
  </div>
 </main>
