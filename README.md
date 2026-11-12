@@ -163,7 +163,7 @@ department.
 | `tests/` | pytest unit tests, one file per source module.
 | `START_HERE.bat` / `start.sh` | One-click student launchers
 | `UNINSTALL.bat` / `uninstall.sh` | Removes DLC and the local `~/.dlc` data folder.
-| `scripts/` | Maintainer utilities - `make_release_zip.py` builds the student release zip.
+| `scripts/` | Maintainer utilities - `make_release_zip.py` builds the student release zip. `digital_oracle/oracle.py check <folder>` compares DLC's wiring view of a set of circuits with Digital's own (the first thing to run on a suspected Layer 1 false positive).
 
 ## Design
 
