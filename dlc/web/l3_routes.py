@@ -405,9 +405,12 @@ def _adopted_program_words(filename: str, temp_path: str,
     from dlc.l3 import official_store
     from dlc.testing.inject import appended_program_words
     try:
-        words = appended_program_words(temp_path, filename)
-        if words is None:
+        found = appended_program_words(temp_path, filename)
+        if found is None:
             return None
+        words, is_program = found
+        if not is_program:
+            return words
         added = official_store.added_row_count(filename, content)
         return words + ["0x00000000"] * (added - len(words))
     except Exception:

@@ -198,7 +198,8 @@ def _check_one(circuit, filename: str, base: list[int],
     return None
 
 
-def appended_program_words(path: str, filename: str) -> list[str] | None:
+def appended_program_words(path: str,
+                           filename: str) -> tuple[list[str], bool] | None:
     from dlc.l3 import official_store
     from dlc.parser.dig_parser import parse_dig_file
 
@@ -214,11 +215,14 @@ def appended_program_words(path: str, filename: str) -> list[str] | None:
                       comp.attributes.get("intFormat", "hex"))
     if got[:len(base)] != base:
         return None
-    return [f"0x{w:08x}" for w in got[len(base):]]
+    return ([f"0x{w:08x}" for w in got[len(base):]],
+            bool(comp.attributes.get("isProgramMemory")))
 
 
 def check_rom_contents(path: str, filename: str, *,
                        coach_temp: bool = False) -> dict | None:
+    """coach_temp: `path` is the coach's temp copy of `filename`, whose ROM
+    may carry the words the coach appended after the registered ones."""
     try:
         from dlc.l3 import official_store
         from dlc.parser.dig_parser import parse_dig_file

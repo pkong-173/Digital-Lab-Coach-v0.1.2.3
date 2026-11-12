@@ -95,7 +95,7 @@ def test_shipped_control_unit_test_is_the_fall_2026_one():
                                 "ALUSrc", "ImmSrc", "ALUOp"]
     assert [ln.split() for ln in lines[1:]] == [
         ln.split() for ln in _LAB5_CONTROL_ROWS.split("\n") if ln.strip()]
-    assert "runtime" not in entry
+    assert entry.get("runtime")
     lab5 = json.loads(Path("data/manifests/cpu.json").read_text(encoding="utf-8"))
     assert mf.normalized_test_hash(entry["content"]) == entry["sha1"] \
         == lab5["official_tests"]["control-unit.dig"]

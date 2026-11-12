@@ -1,5 +1,5 @@
 """
-For an editable file, student edited there test + rom pair, whereas the built-in hidden rom should not be rewritten or modified.
+What students append to the official rom does not overwrite original hidden correct rom
 """
 
 import json
@@ -117,6 +117,7 @@ def test_the_word_count_must_equal_the_number_of_added_rows():
                 in r.json()["detail"])
     assert _listed()["source"] == "default"
 
+    # rows written with a loop count as the rows Digital would run
     looped = _builtin() + "\nrepeat(3) C 1 2"
     assert _save(looped, f"{W1} {W2}").status_code == 400
     assert _save(looped, f"{W1} {W2} {W1}").status_code == 200
@@ -134,7 +135,7 @@ def test_a_word_is_0x_and_up_to_eight_hex_digits():
 
 def test_the_built_in_rows_and_the_header_stay_as_they_are():
     lines = _builtin().split("\n")
-    changed = "\n".join(lines[:6] + ["C 9999 9999"] + lines[7:])
+    changed = "\n".join(lines[:6] + ["C 9999 9999"] + lines[7:])     # lines[0] is the header
     r = _save(changed + "\nC 1 2", W1)
     assert r.status_code == 400
     assert "first 23 rows of 'cpu.dig' are the built-in test" in r.json()["detail"]
@@ -147,6 +148,7 @@ def test_the_built_in_rows_and_the_header_stay_as_they_are():
     assert r.status_code == 400
     assert "header line of 'cpu.dig' must stay as it is: clk ReadData1 ReadData2" in r.json()["detail"]
 
+    # an own row slipped in front of the built-in rows is a changed row too
     r = _save("\n".join([lines[0], "C 1 2"] + lines[1:]), W1)
     assert r.status_code == 400 and "row 1 was changed or removed" in r.json()["detail"]
     assert _listed()["source"] == "default"
@@ -347,6 +349,65 @@ def test_adopting_from_another_program_stores_the_rows_without_words(tmp_path):
         assert body["ok"] is True and body["program_words"] == 0
         assert _listed()["program_extra"] is None
         assert ost.get_runtime_payload("cpu.dig", "rom") is None
+    finally:
+        server._SESSIONS.pop(sid, None)
+
+
+# ------------------------------------- a table ROM: the control unit's
+
+def _control_unit(rom_words, rows: str) -> str:
+    return (_cpu(rom_words, rows)
+            .replace("<entry><string>isProgramMemory</string><boolean>true</boolean></entry>", "")
+            .replace("Instruction Memory", "Control ROM"))
+
+
+def test_the_control_rom_table_is_checked_and_never_listed(tmp_path):
+    table = ost.builtin_program("control-unit.dig")
+    cu = _listed("control-unit.dig")
+    assert (cu["source"], cu["editable"]) == ("default", False)
+    assert cu["program_extra"] == [] and "runtime" not in cu
+
+    p = tmp_path / "control-unit.dig"
+    rows = ost.get_content("control-unit.dig")
+    p.write_text(_control_unit(table, rows), encoding="utf-8")
+    assert check_rom_contents(str(p), "control-unit.dig") is None
+
+    wrong = table[:4] + [table[4] ^ 1] + table[5:]
+    p.write_text(_control_unit(wrong, rows), encoding="utf-8")
+    v = check_rom_contents(str(p), "control-unit.dig")
+    assert (v["status"], v["reason"], v["first_bad_address"]) == ("mismatch", "official", 4)
+    assert v["rom"] == "Control ROM" and "1 of 11 words differ" in v["message"]
+    assert f"your word there is {wrong[4]:x}" in v["message"]
+
+    top = tmp_path / "cpu.dig"
+    top.write_text(_cpu(ost.builtin_program("cpu.dig"), _builtin()).replace(
+        "</visualElements>",
+        "<visualElement><elementName>control-unit.dig</elementName><elementAttributes/>"
+        '<pos x="600" y="0"/></visualElement></visualElements>'), encoding="utf-8")
+    v = check_rom_contents(str(top), "cpu.dig")
+    assert v is not None and v["file"] == "control-unit.dig" and v["first_bad_address"] == 4
+
+
+def test_rows_adopted_for_the_control_unit_bring_no_words_and_keep_the_check(tmp_path):
+    table = ost.builtin_program("control-unit.dig")
+    rows = ost.get_content("control-unit.dig")
+    more = rows + "\n" + rows.split("\n")[1] + "\n" + rows.split("\n")[2]
+    r = client.post("/api/circuit", files=[
+        ("files", ("control-unit.dig", _control_unit(table, rows).encode(), "application/xml"))])
+    sid = r.json()["session_id"]
+    temp = tmp_path / "coach_temp.dig"
+    temp.write_text(_control_unit(table, more), encoding="utf-8")
+    server._SESSIONS[sid]["files"].append({"name": "control-unit__coach.dig", "path": str(temp)})
+    try:
+        body = client.post("/api/l3/adopt_official",
+                           json={"session_id": sid, "filename": "control-unit.dig"}).json()
+        assert body["ok"] is True and body["rows"] == 29 and body["program_words"] == 0
+        cu = _listed("control-unit.dig")
+        assert (cu["source"], cu["program_extra"]) == ("override", [])
+        assert ost.program_words("control-unit.dig") == (table, [])
+        p = tmp_path / "control-unit.dig"
+        p.write_text(_control_unit(table[:-1] + [table[-1] ^ 1], rows), encoding="utf-8")
+        assert check_rom_contents(str(p), "control-unit.dig")["reason"] == "official"
     finally:
         server._SESSIONS.pop(sid, None)
 
