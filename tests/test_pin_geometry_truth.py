@@ -137,6 +137,96 @@ def test_subcircuit_boxes_follow_digital_in_every_rotation(tmp_path):
     assert not wrong, f"{len(wrong)} instance(s) differ, first: {wrong[0]}"
 
 
+def _layout_box(tmp_path, ports, child_top, box):
+    """child.dig with the given ports (file order) and top.dig with one box."""
+    def attrs(d):
+        return "".join(
+            _rotated(v) if k == "rotation"
+            else f"<entry><string>shapeType</string><shapeType>{v}</shapeType></entry>" if k == "shapeType"
+            else _entry(k, v, "int" if isinstance(v, int) else "string") for k, v in d.items())
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    child = "".join(_ve(kind, x, y, _entry("Label", lab) + (_rotated(r) if r else ""))
+                    for kind, lab, x, y, r in ports)
+    (tmp_path / "child.dig").write_text(_xml(child, top=attrs(child_top)), encoding="utf-8")
+    return _ve("child.dig", X0, Y0, attrs(box))
+
+
+def _edge_stub(pin, pins):
+    """Far end of a 60-long wire leaving the pin straight away from the box."""
+    xs = sorted({p[0] for p in pins})
+    ys = sorted({p[1] for p in pins})
+    corner = pin[1] in (ys[0], ys[-1])
+    if pin[0] == xs[0] and not (len(xs) > 2 and corner):
+        return (pin[0] - 60, pin[1])
+    if pin[0] == xs[-1] and not (len(xs) > 2 and corner):
+        return (pin[0] + 60, pin[1])
+    return (pin[0], pin[1] - 60) if pin[1] == ys[0] else (pin[0], pin[1] + 60)
+
+
+def test_boxes_set_to_the_layout_shape_follow_digital(tmp_path):
+    """Digital's Layout shape puts each pin on the side its In/Out faces in
+    the child, in the order they are drawn there, not in file order."""
+    assert len(TRUTH["layouts"]) > 60
+    wrong = []
+    for k, (ports, child_top, box, pins) in enumerate(TRUTH["layouts"]):
+        folder = tmp_path / f"l{k}"
+        inst = _layout_box(folder, ports, child_top, box)
+        (folder / "top.dig").write_text(_xml(inst), encoding="utf-8")
+        circuit = parse_dig_file(str(folder / "top.dig"))
+        ours = sorted([x - X0, y - Y0, _cls(s.direction), s.name]
+                      for _i, (x, y), s in _all_predicted_pins(circuit))
+        if ours != pins:
+            wrong.append((child_top, box, ports, ours, pins))
+            continue
+        pts = [(x + X0, y + Y0) for x, y, _d, _n in pins]
+        wired = [(pt, _edge_stub(pt, pts)) for pt in pts]
+        (folder / "top.dig").write_text(
+            _xml(inst, "".join(_wire(a, b) for a, b in wired)), encoding="utf-8")
+        if _unattached(parse_dig_file(str(folder / "top.dig")), wired):
+            wrong.append((child_top, box, ports, "a wire on a real pin is not attached", pins))
+    assert not wrong, f"{len(wrong)} box(es) differ, first: {wrong[0]}"
+
+
+def test_a_control_unit_box_in_the_layout_shape_is_clean(tmp_path):
+    """The case that was flagged: a passing CPU whose control-unit box is
+    set to Layout. The child lists its outputs bottom-up, so in the default
+    shape every output would sit on another row, and all pins one row up."""
+    def port(kind, label, bits, x, y):
+        return _ve(kind, x, y, _entry("Label", label) + (_entry("Bits", bits, "int") if bits > 1 else ""))
+
+    outs = (("RegWrite", 1), ("ALUSrc", 1), ("ImmSrc", 2), ("ALUOp", 4))
+    ins = (("opcode", 7), ("funct3", 3), ("funct7", 7))
+    child = "".join(port("Out", n, b, 600, 400 - 40 * i) for i, (n, b) in enumerate(outs))
+    child += "".join(port("In", n, b, 100, 220 + 160 * i) for i, (n, b) in enumerate(ins))
+    child += "".join(_ve("Const", 560, 400 - 40 * i, _entry("Bits", b, "int") if b > 1 else "")
+                     + "" for i, (_n, b) in enumerate(outs))
+    child_wires = "".join(_wire((560, 400 - 40 * i), (600, 400 - 40 * i)) for i in range(4))
+    (tmp_path / "control-unit.dig").write_text(_xml(child, child_wires), encoding="utf-8")
+
+    def parent(layout: bool) -> str:
+        box = _ve("control-unit.dig", 820, 640,
+                  "<entry><string>shapeType</string><shapeType>LAYOUT</shapeType></entry>" if layout else "")
+        feeds = "".join(port("In", n, b, 700, 660 + 20 * i) for i, (n, b) in enumerate(ins))
+        sinks = "".join(port("Out", f"{n}_seen", b, 980, 720 - 20 * i) for i, (n, b) in enumerate(outs))
+        wires = "".join(_wire((700, 660 + 20 * i), (820, 660 + 20 * i)) for i in range(3))
+        wires += "".join(_wire((880, 720 - 20 * i), (980, 720 - 20 * i)) for i in range(4))
+        return _xml(box + feeds + sinks, wires)
+
+    path = tmp_path / "cpu.dig"
+    path.write_text(parent(layout=True), encoding="utf-8")
+    circuit = parse_dig_file(str(path))
+    at = {s.name: (x - 820, y - 640) for _i, (x, y), s in _all_predicted_pins(circuit)
+          if circuit.components[_i].element_name == "control-unit.dig"}
+    assert at == {"opcode": (0, 20), "funct3": (0, 40), "funct7": (0, 60),
+                  "ALUOp": (60, 20), "ImmSrc": (60, 40), "ALUSrc": (60, 60), "RegWrite": (60, 80)}
+    assert check_all_l1(circuit).issues == []
+
+    # the same wires on a box left in the default shape do not fit it
+    path.write_text(parent(layout=False), encoding="utf-8")
+    kinds = {i.kind for i in check_all_l1(parse_dig_file(str(path))).issues}
+    assert {"width_mismatch", "dangling_subcircuit_input"} <= kinds
+
+
 def _rotated(rot):
     return f'<entry><string>rotation</string><rotation rotation="{rot}"/></entry>'
 

@@ -184,9 +184,54 @@ def _midpoint_branches(circuit: Circuit) -> list[tuple[tuple, tuple]]:
                     pairs.append((a, ep))
     return pairs
 
-def _subcircuit_pin_specs(child) -> list:
+def _subcircuit_shape(child, instance=None) -> str:
+    # Digital: the box's own "Shape" setting wins unless it is DEFAULT, then
+    # the child circuit's setting applies.
+    shape = str((instance.attributes.get("shapeType") if instance is not None else None) or "DEFAULT")
+    if shape == "DEFAULT":
+        shape = str(child.attributes.get("shapeType") or "DEFAULT")
+    return shape
+
+
+def _layout_pin_specs(child) -> list:
+    # Digital's "Layout" shape (LayoutShape): a pin sits on the side its
+    # In/Out faces in the child, in the order the elements are drawn there.
+    from dlc.parser.pin_geometry import PinSpec
+    sides = {"left": [], "right": [], "top": [], "bottom": []}
+    for i, c in enumerate(child.components):
+        rot = _component_rotation(c) % 4
+        if c.is_input() or c.element_name == "Clock":
+            side, direction = ("left", "bottom", "right", "top")[rot], "in"
+        elif c.is_output():
+            side, direction = ("right", "top", "left", "bottom")[rot], "out"
+        else:
+            continue
+        along = c.position.x if side in ("top", "bottom") else c.position.y
+        sides[side].append((along, i, c, direction))
+    height = max(len(sides["left"]), len(sides["right"])) + 1
+    height = max(height, int(child.attributes.get("Height", 3)))
+    width = max(len(sides["top"]), len(sides["bottom"])) + 1
+    width = max(width, int(child.attributes.get("Width", _SUBCIRCUIT_DEFAULT_WIDTH_GRID)))
+    pins = []
+    for side, length in (("left", height), ("right", height), ("top", width), ("bottom", width)):
+        row = sorted(sides[side], key=lambda t: t[0])
+        n = len(row)
+        delta = (length + 2) // (n + 1)
+        start = (length - delta * (n - 1)) // 2
+        for k, (_along, i, c, direction) in enumerate(row):
+            at = (start + k * delta) * 20
+            x, y = {"left": (0, at), "right": (width * 20, at),
+                    "top": (at, 0), "bottom": (at, height * 20)}[side]
+            pins.append(PinSpec(name=c.label or f"{direction}_{i}",
+                                offset_x=x, offset_y=y, direction=direction))
+    return pins
+
+
+def _subcircuit_pin_specs(child, instance=None) -> list:
 
     from dlc.parser.pin_geometry import PinSpec
+    if _subcircuit_shape(child, instance) == "LAYOUT":
+        return _layout_pin_specs(child)
     width_grid = int(child.attributes.get("Width", _SUBCIRCUIT_DEFAULT_WIDTH_GRID))
     body_width = width_grid * 20
     child_inputs = [
@@ -237,7 +282,7 @@ def _all_predicted_pins(circuit: Circuit) -> list:
         if comp.element_name.endswith(".dig") and id(comp) in sub_predicted:
             child = sub_predicted[id(comp)]
             rotation = _component_rotation(comp)
-            for spec in _subcircuit_pin_specs(child):
+            for spec in _subcircuit_pin_specs(child, comp):
                 dx, dy = _rotate(spec.offset_x, spec.offset_y, rotation)
                 out.append((
                     c_idx,

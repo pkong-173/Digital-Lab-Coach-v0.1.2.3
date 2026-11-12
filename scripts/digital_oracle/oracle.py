@@ -190,6 +190,8 @@ def check(targets: list[str]) -> int:
 def _attr_xml(key, value) -> str:
     if key == "rotation":
         return f'<entry><string>rotation</string><rotation rotation="{value}"/></entry>'
+    if key == "shapeType":
+        return f"<entry><string>shapeType</string><shapeType>{value}</shapeType></entry>"
     if key == "inverterConfig":
         inner = "".join(f"<string>{escape(v)}</string>" for v in value)
         return f"<entry><string>inverterConfig</string><inverterConfig>{inner}</inverterConfig></entry>"
@@ -257,9 +259,59 @@ def _variants():
     yield "Comparator_signed", "Comparator", {"Bits": 32, "Signed": True}
 
 
+def _layout_variants():
+    """(ports, child attributes, box attributes) for sub-circuit boxes whose
+    shape is set to Layout, on the box or in the child. A port is
+    [kind, label, x, y, rotation] in FILE order."""
+    lay = {"shapeType": "LAYOUT"}
+
+    def lr(n, m):
+        return ([["In", f"i{k}", 100, 100 + 40 * k, 0] for k in range(n)]
+                + [["Out", f"o{k}", 500, 100 + 40 * k, 0] for k in range(m)])
+
+    for n, m in itertools.product(range(7), range(7)):
+        if n + m:
+            yield lr(n, m), {}, lay
+    yield lr(3, 4), lay, {}
+    yield lr(3, 4), lay, {"shapeType": "SIMPLE"}
+    yield lr(3, 4), lay, {"shapeType": "DEFAULT"}
+    yield lr(3, 4), {}, {"shapeType": "SIMPLE"}
+    for width, height in ((1, None), (6, None), (None, 2), (None, 6), (5, 9)):
+        top = dict(lay)
+        if width:
+            top["Width"] = width
+        if height:
+            top["Height"] = height
+        yield lr(3, 4), top, {}
+        yield lr(1, 1), top, {}
+    # the file lists the outputs bottom-up, a clock pin sits between inputs
+    drawn = ([["Out", f"o{k}", 500, 100 + 40 * (3 - k), 0] for k in range(4)]
+             + [["In", "a", 100, 100, 0], ["Clock", "ck", 100, 140, 0], ["In", "b", 100, 180, 0]])
+    four = [["In", "a", 100, 100, 0], ["In", "b", 100, 200, 0], ["In", "t0", 300, 40, 3],
+            ["In", "t1", 200, 40, 3], ["In", "bm", 260, 400, 1], ["In", "r", 500, 300, 2],
+            ["Out", "y", 500, 100, 0], ["Out", "ot", 400, 40, 1], ["Out", "ob", 340, 400, 3],
+            ["Out", "ol", 100, 300, 2], ["Clock", "ck", 100, 260, 0]]
+    wide = ([["In", f"t{k}", 100 + 60 * k, 40, 3] for k in range(5)]
+            + [["Out", f"b{k}", 100 + 60 * k, 400, 3] for k in range(2)]
+            + [["In", "a", 40, 200, 0], ["Out", "y", 600, 200, 0]])
+    for ports in (drawn, four, wide, lr(6, 2), lr(2, 5)):
+        for rot in range(4):
+            yield ports, {}, ({**lay, "rotation": rot} if rot else lay)
+
+
 def record(dst: str) -> int:
     with tempfile.TemporaryDirectory(prefix="dlc-oracle-") as tmp:
         index: dict[str, dict] = {}
+        layout_rows = list(_layout_variants())
+        for k, (ports, top, box) in enumerate(layout_rows):
+            Path(tmp, f"lay{k}").mkdir()
+            Path(tmp, f"lay{k}", "child.dig").write_text(_circuit_xml(
+                [(kind, {"Label": lab, **({"rotation": r} if r else {})}, x, y)
+                 for kind, lab, x, y, r in ports], top), encoding="utf-8")
+            Path(tmp, f"lay{k}", "top.dig").write_text(
+                _circuit_xml([("child.dig", box, X0, Y0)]), encoding="utf-8")
+        layout_views = digital_view([str(Path(tmp, f"lay{k}", "top.dig"))
+                                     for k in range(len(layout_rows))])
         for tag, name, attrs in _variants():
             for rot in range(4):
                 a = dict(attrs)
@@ -302,6 +354,13 @@ def record(dst: str) -> int:
                          None if m.group(3) == "d" else int(m.group(3)), rot, pins])
         else:
             elements.append([index[fn]["name"], index[fn]["attrs"], pins])
+    layouts = []
+    for (ports, top, box), view in zip(layout_rows, layout_views):
+        if view.get("error") or view["elements"][0].get("pin_error"):
+            sys.exit(f"Digital could not place a Layout box: {top} {box}")
+        layouts.append([ports, top, box, sorted(
+            [p["x"] - X0, p["y"] - Y0, code.get(p["d"], "b"), p["n"]]
+            for p in view["elements"][0]["pins"])])
     old = {}
     if Path(dst).exists():
         old = json.loads(Path(dst).read_text(encoding="utf-8"))
@@ -309,7 +368,8 @@ def record(dst: str) -> int:
         "source": old.get("source") or
         "Digital (hneemann/Digital), VisualElement.getPins() for one element at the origin",
         "recorded": old.get("recorded") if (old.get("elements") == elements
-                                            and old.get("subcircuits") == subs)
+                                            and old.get("subcircuits") == subs
+                                            and old.get("layouts") == layouts)
         else __import__("datetime").date.today().isoformat(),
         "note": old.get("note") or "",
     }
@@ -320,9 +380,13 @@ def record(dst: str) -> int:
         f.write(' "elements": [\n' + ",\n".join(
             "  " + json.dumps(r, separators=(",", ":")) for r in elements) + "\n ],\n")
         f.write(' "subcircuits": [\n' + ",\n".join(
-            "  " + json.dumps(r, separators=(",", ":")) for r in subs) + "\n ]\n}\n")
-    changed = old.get("elements") != elements or old.get("subcircuits") != subs
-    print(f"{dst}: {len(elements)} element rows, {len(subs)} sub-circuit rows"
+            "  " + json.dumps(r, separators=(",", ":")) for r in subs) + "\n ],\n")
+        f.write(' "layouts": [\n' + ",\n".join(
+            "  " + json.dumps(r, separators=(",", ":")) for r in layouts) + "\n ]\n}\n")
+    changed = (old.get("elements") != elements or old.get("subcircuits") != subs
+               or old.get("layouts") != layouts)
+    print(f"{dst}: {len(elements)} element rows, {len(subs)} sub-circuit rows, "
+          f"{len(layouts)} Layout-shape rows"
           f" ({'CHANGED' if changed and old else 'unchanged' if old else 'written'}).")
     return 0
 

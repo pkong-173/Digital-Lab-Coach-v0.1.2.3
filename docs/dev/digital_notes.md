@@ -1,6 +1,6 @@
 # Digital Notes
 
-Last updated: 2026/9/6
+Last updated: 2026/11/12
 
 ---
 
@@ -253,6 +253,21 @@ verified empirically:
   of truth: `java -cp Digital.jar CLI svg -dig f.dig -svg out.svg` (blue
   circles = inputs, red = outputs). The implicit-pin x-midpoint heuristic
   below applies only to UNRESOLVED children (missing files).
+- **Subcircuit box shape (`shapeType`)**: the box's own setting wins unless
+  it is `DEFAULT`, then the child circuit's setting applies. `DEFAULT`,
+  `SIMPLE` and `CUSTOM` without a drawn shape are the box above. `LAYOUT`
+  (Digital's `LayoutShape`) puts each pin on the side its In/Out faces in
+  the child (In/Clock: rotation 0 left, 1 bottom, 2 right, 3 top; Out: 0
+  right, 1 top, 2 left, 3 bottom), ordered by where the elements are DRAWN
+  (y on the left/right sides, x on top/bottom), not by file order. Box
+  height = max(left, right) + 1 rows, at least the child's `Height` (3);
+  width = max(top, bottom) + 1, at least `Width` (3). On a side of length
+  L with n pins: `delta = (L + 2) // (n + 1)`, first pin at
+  `(L - delta * (n - 1)) // 2`, in grid steps. A passing CPU whose
+  control-unit box was set to Layout was flagged with four width
+  mismatches and two undriven inputs before this was read. `DIL`,
+  `MINIMIZED` and drawn custom shapes are not modelled: such a box is
+  still read as the default box.
 - **Subcircuit instance pin direction resolution** (unresolved children only): the instance has no native geometry, so direction is inferred by splitting the instance's implicit pins at the x-midpoint (left = inputs, right = outputs), sorting each side by y, and zipping against the child circuit's `In`/`Out` elements sorted by y. Implicit-pin count is capped to the child's port count to prevent over-claim from neighboring routing.
 
 ## L1 regression ground truths
