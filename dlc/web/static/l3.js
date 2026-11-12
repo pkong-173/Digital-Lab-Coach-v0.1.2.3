@@ -1061,6 +1061,9 @@ function l3InjectHtml(mb) {
       ${out.outcome === "all_set" && (out.rows || []).some((r) => r.added)
         ? (out._adopted
           ? `<div class="l3-prop-bar"><span class="l3-prop-hint l3-added-note">official test updated ✓ — fingerprint ${escapeHtml(out._adopted)}; future scans hold this circuit to the merged standard.</span></div>`
+            + (out._adoptedWords
+              ? `<div class="l3-prop-bar"><span class="l3-prop-hint">The instruction words of the new rows are registered with the test: Settings &rarr; Official tests lists them. Your own ${escapeHtml(file)} still holds the shorter program. Use <b>Copy the full ROM program</b> and paste it into the Instruction Memory in Digital, or the new rows will fail on the next run.</span></div>`
+              : "")
           : `<div class="l3-prop-bar"><button class="btn-ghost" data-l3-act="adopt" data-l3-file="${escapeHtml(file)}">Adopt into official tests</button>
              <span class="l3-prop-hint">Adds the verified rows to this lab's official test <b>on this computer</b> — from then on, scans treat the merged set as the standard to pass.</span></div>`)
         : ""}
@@ -1433,7 +1436,9 @@ async function l3AdoptOfficial(file) {
   }
   if (body && body.ok) {
     out._adopted = (body.sha1 || "").slice(0, 10);
-    logEvent("l3_modeB_adopted_official", { file, rows: body.rows });
+    out._adoptedWords = body.program_words || 0;
+    logEvent("l3_modeB_adopted_official",
+             { file, rows: body.rows, program_words: out._adoptedWords });
   } else {
     alert(body && body.warning ? body.warning : "Adopt failed.");
   }
@@ -1748,7 +1753,10 @@ function l3ShowAdoptPopup(filename) {
         });
         const body = await res.json();
         if (body.ok) {
-          if (mb.inject[f]) mb.inject[f]._adopted = body;
+          if (mb.inject[f]) {
+            mb.inject[f]._adopted = (body.sha1 || "").slice(0, 10);
+            mb.inject[f]._adoptedWords = body.program_words || 0;
+          }
         } else {
           okAll = false;
           if (msg) {

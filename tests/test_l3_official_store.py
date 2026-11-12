@@ -127,39 +127,55 @@ def test_defaults_cannot_be_hand_edited_but_adopt_can():
         "alu.dig"] == "override"
 
 
-def test_a_default_marked_editable_can_be_rewritten_by_hand():
+def test_a_default_marked_editable_takes_rows_added_by_hand():
+    """cpu.dig: the revealed test is a light one and the autograder holds
+    more, so students may add their own rows to it. The rows it ships with
+    go with a registered program and stay; tests/
+    test_program_extension_words.py covers the rules for the added rows."""
     assert ost.editable_defaults() == ["cpu.dig"]
     listed = {t["filename"]: t for t in ost.list_tests()}
     assert listed["cpu.dig"]["editable"] is True
     assert listed["register-file.dig"]["editable"] is False
+    builtin = ost.get_content("cpu.dig")
 
     r = client.post("/api/config/official_tests", json={
-        "filename": "cpu.dig", "content": "clk ReadData1 ReadData2\nC 1 2"})
+        "filename": "cpu.dig", "content": builtin + "\nC 1 2",
+        "program_words": "0x00628433"})
     assert r.status_code == 200
     mine = {t["filename"]: t for t in ost.list_tests()}["cpu.dig"]
     assert (mine["source"], mine["editable"]) == ("override", True)
-    assert ost.status_for("cpu.dig", "clk ReadData1 ReadData2\nC 1 2") == "official"
+    assert ost.status_for("cpu.dig", builtin + "\nC 1 2") == "official"
 
     # a second edit of the override works too, and deleting it restores the default
-    ost.save_test("cpu.dig", "clk ReadData1 ReadData2\nC 3 4")
-    assert ost.get_content("cpu.dig") == "clk ReadData1 ReadData2\nC 3 4"
+    ost.save_test("cpu.dig", builtin + "\nC 3 4", program_extra="0x40628533")
+    assert ost.get_content("cpu.dig") == builtin + "\nC 3 4"
     r = client.delete("/api/config/official_tests", params={"filename": "cpu.dig"})
     assert r.json()["removed"] is True
     assert {t["filename"]: t["source"] for t in ost.list_tests()}["cpu.dig"] == "default"
+
+    r = client.post("/api/config/official_tests", json={
+        "filename": "cpu.dig", "content": "clk ReadData1 ReadData2\nC 1 2"})
+    assert r.status_code == 400
+    assert "must stay as they are" in r.json()["detail"]
 
     # a test the user added for their own lab stays editable as before
     ost.save_test("mylab.dig", "A Y\n0 1")
     assert {t["filename"]: t for t in ost.list_tests()}["mylab.dig"]["editable"] is True
 
 
-def test_registered_rom_contents_apply_to_the_built_in_test_only():
+def test_registered_rom_contents_follow_the_test_in_force():
+    builtin = ost.get_content("cpu.dig")
     assert ost.source_of("cpu.dig") == "default"
-    assert ost.get_runtime_payload("cpu.dig", "rom")
-    ost.save_test("cpu.dig", "clk ReadData1 ReadData2\nC 1 2")
+    official = ost.get_runtime_payload("cpu.dig", "rom")
+    assert official
+    ost.save_test("cpu.dig", builtin + "\nC 1 2", program_extra="0x00628433")
     assert ost.source_of("cpu.dig") == "override"
+    assert ost.get_runtime_payload("cpu.dig", "rom") == official + ",628433"
+    ost.save_test("cpu.dig", "clk ReadData1 ReadData2\nC 1 2",
+                  allow_default_override=True)
     assert ost.get_runtime_payload("cpu.dig", "rom") is None
     ost.delete_test("cpu.dig")
-    assert ost.get_runtime_payload("cpu.dig", "rom")
+    assert ost.get_runtime_payload("cpu.dig", "rom") == official
     assert ost.source_of("nothing.dig") is None
 
 

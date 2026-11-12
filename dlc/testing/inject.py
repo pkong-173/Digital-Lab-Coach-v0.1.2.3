@@ -123,6 +123,17 @@ ROM_GATE_MESSAGES = {
         "first at address {address} (your word there is {word}). Fix the "
         "ROM before debugging — with the wrong contents every row can "
         "fail for the wrong reason."),
+    "own_words": (
+        "ROM '{rom}' in {file} holds the official program, but what follows "
+        "it does not match the instruction words registered for the rows "
+        "you added ({found} in the ROM, {registered} registered; first "
+        "difference at address {address}). Make them agree: correct the "
+        "ROM in Digital, or the words in Settings → Official tests."),
+    "unregistered": (
+        "ROM '{rom}' in {file} holds the official program, then more words "
+        "that are not registered (count: {found}). To test them, add their "
+        "rows and these words in Settings → Official tests. Otherwise "
+        "remove them from the ROM."),
 }
 
 
@@ -133,8 +144,13 @@ def _plain_name(filename) -> str:
     return base
 
 
-def _check_one(circuit, filename: str, official: str) -> dict | None:
-    want = _data_words(official, "hex")
+def _check_one(circuit, filename: str, base: list[int],
+               extra: list[int] | None = None, *,
+               can_register: bool = False,
+               allow_tail: bool = False) -> dict | None:
+    want = list(base) + list(extra or [])
+    while want and want[-1] == 0:
+        want.pop()
     roms = _checked_roms(circuit)
     if not roms:
         return {"status": "missing", "file": filename,
@@ -151,6 +167,8 @@ def _check_one(circuit, filename: str, official: str) -> dict | None:
             return {"status": "empty", **info,
                     "message": ROM_GATE_MESSAGES["empty"].format(
                         file=filename, rom=name)}
+        if allow_tail and got[:len(want)] == want:
+            continue
         if got != want:
             span = max(len(got), len(want))
             bad = [a for a in range(span)
@@ -158,8 +176,21 @@ def _check_one(circuit, filename: str, official: str) -> dict | None:
                    != (want[a] if a < len(want) else 0)]
             first = bad[0]
             word = got[first] if first < len(got) else 0
-            return {"status": "mismatch", **info,
-                    "differing": len(bad), "first_bad_address": first,
+            verdict = {"status": "mismatch", **info,
+                       "differing": len(bad), "first_bad_address": first}
+            official_intact = got[:len(base)] == list(base)
+            if official_intact and extra:
+                return {**verdict, "reason": "own_words",
+                        "message": ROM_GATE_MESSAGES["own_words"].format(
+                            file=filename, rom=name, address=first,
+                            found=len(got) - len(base),
+                            registered=len(extra))}
+            if official_intact and can_register:
+                return {**verdict, "reason": "unregistered",
+                        "message": ROM_GATE_MESSAGES["unregistered"].format(
+                            file=filename, rom=name,
+                            found=len(got) - len(base))}
+            return {**verdict, "reason": "official",
                     "message": ROM_GATE_MESSAGES["mismatch"].format(
                         file=filename, rom=name, differing=len(bad),
                         expected=len(want), address=first,
@@ -167,28 +198,51 @@ def _check_one(circuit, filename: str, official: str) -> dict | None:
     return None
 
 
-def check_rom_contents(path: str, filename: str) -> dict | None:
+def appended_program_words(path: str, filename: str) -> list[str] | None:
+    from dlc.l3 import official_store
+    from dlc.parser.dig_parser import parse_dig_file
+
+    base = official_store.builtin_program(_plain_name(filename))
+    if base is None:
+        return None
+    circuit = parse_dig_file(path)
+    roms = _checked_roms(circuit)
+    if len(roms) != 1:
+        return None
+    comp = circuit.components[roms[0]]
+    got = _data_words(comp.attributes.get("Data", ""),
+                      comp.attributes.get("intFormat", "hex"))
+    if got[:len(base)] != base:
+        return None
+    return [f"0x{w:08x}" for w in got[len(base):]]
+
+
+def check_rom_contents(path: str, filename: str, *,
+                       coach_temp: bool = False) -> dict | None:
     try:
-        from dlc.l3.official_store import get_runtime_payload
+        from dlc.l3 import official_store
         from dlc.parser.dig_parser import parse_dig_file
 
-        queue = [(parse_dig_file(path), _plain_name(filename))]
+        editable = set(official_store.editable_defaults())
+        queue = [(parse_dig_file(path), _plain_name(filename), coach_temp)]
         seen: set[str] = set()
         while queue:
-            circuit, name = queue.pop(0)
+            circuit, name, tail_ok = queue.pop(0)
             if name in seen:
                 continue
             seen.add(name)
-            official = get_runtime_payload(name, "rom")
-            if official:
-                verdict = _check_one(circuit, name, official)
+            parts = official_store.program_words(name)
+            if parts:
+                verdict = _check_one(circuit, name, parts[0], parts[1],
+                                     can_register=name in editable,
+                                     allow_tail=tail_ok)
                 if verdict is not None:
                     return verdict
             for sub in circuit.subcircuits:
                 ref = getattr(sub, "reference", None)
                 child = getattr(sub, "child_circuit", None)
                 if ref and child is not None:
-                    queue.append((child, _plain_name(ref)))
+                    queue.append((child, _plain_name(ref), False))
         return None
     except Exception:
         return None

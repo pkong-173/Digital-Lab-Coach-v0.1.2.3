@@ -284,7 +284,7 @@ Restart the app, or the server, after changing any of these.
 | Lecture list Layer 2 cites | `SYLLABUS_311` in `dlc/llm/explain.py` (A.3) |
 | Lab categories, subcircuit roles and formula models, program decode | one manifest per lab in `data/manifests/` ([MANIFEST_GUIDE.md](MANIFEST_GUIDE.md)) |
 | Files Mode A analyzes even when most rows fail | the `no_lazy_gate` list in that lab's manifest; the shipped CPU manifests list the control unit |
-| Official tests | Settings → Official tests (`~/.dlc/official_tests.json`); shipped defaults in `data/official_tests_defaults.json`. Add `"editable": true` to an entry there to let students rewrite that test by hand (shipped: `cpu.dig`) |
+| Official tests | Settings → Official tests (`~/.dlc/official_tests.json`); shipped defaults in `data/official_tests_defaults.json`. Add `"editable": true` to an entry there to let students add their own rows to that test by hand (shipped: `cpu.dig`; a test with a registered ROM program takes one instruction word per added row) |
 | The program a lab's instruction ROM must hold | the `runtime` entry in `data/official_tests_defaults.json` ([instructor_rom_config.md](instructor_rom_config.md)) |
 | The formula models themselves | `dlc/sim/models.py`, one function per known subcircuit |
 | Digital.jar location | first-run dialog, Settings, or env `DIGITAL_JAR` |

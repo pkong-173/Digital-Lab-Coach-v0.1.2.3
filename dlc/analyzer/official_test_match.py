@@ -15,7 +15,7 @@ def _fix_modified() -> str:
         names = []
     if names:
         return ("Open Settings → Official tests to see the rows that run "
-                "instead, or rewrite them there where that is allowed "
+                "instead, or add your own rows there where that is allowed "
                 f"(currently only {', '.join(names)}). {_FIX_COACH}")
     return ("Open Settings → Official tests to see the rows that run "
             f"instead. {_FIX_COACH}")

@@ -80,6 +80,23 @@ function proxyMsg(text, bad) {
   setTimeout(() => { if (el.dataset.msg === text) { el.textContent = ""; el.dataset.msg = ""; } }, 4000);
 }
 
+function otWordsBox(t, canEdit) {
+  if (!t.has_program) return "";
+  const mine = (t.program_extra || []).join("\n");
+  if (!canEdit && !mine) return "";
+  const name = escapeHtml(t.filename);
+  const hint = canEdit
+    ? `<div class="muted ot-words-hint">The first ${Number(t.base_rows) || 0} rows are the built-in test and stay as they are. Add your own rows after them, then write one instruction word for each added row here, one per line and in the same order. Put the same words into the ROM in Digital, right after the official program.</div>`
+    : "";
+  return `
+      <div class="ot-words">
+        <div class="ot-words-label">Instruction words for the rows you added</div>
+        ${hint}
+        <textarea class="text-input ot-textarea ot-words-area" data-ot-words="${name}"
+                  spellcheck="false" placeholder="0x00628433&#10;0x40628533"${canEdit ? "" : " readonly"}>${escapeHtml(mine)}</textarea>
+      </div>`;
+}
+
 async function renderOfficialTests() {
   const list = document.getElementById("ot-list");
   if (!list) return;
@@ -94,6 +111,8 @@ async function renderOfficialTests() {
     return;
   }
   list.classList.remove("muted");
+  const wasOpen = new Set([...list.querySelectorAll("details[open]")]
+    .map((d) => d.dataset.ot));
   list.innerHTML = tests.map((t) => {
     const src = t.source || "user";
     const canEdit = src === "user" || !!t.editable;
@@ -115,15 +134,17 @@ async function renderOfficialTests() {
       : (src === "override"
         ? `<button class="btn-ghost ot-delete" data-ot-del="${name}">Delete override (revert to default)</button>`
         : "");
+    const words = otWordsBox(t, canEdit);
     const editor = (saveBtn || delBtn)
-      ? `${area}
+      ? `${area}${words}
       <div class="settings-row">
         ${saveBtn}
         ${delBtn}
+        <span class="modal-msg ot-entry-msg" data-ot-msg="${name}"></span>
       </div>`
-      : area;
+      : area + words;
     return `
-    <details class="ot-item" data-ot="${escapeHtml(t.filename)}">
+    <details class="ot-item" data-ot="${escapeHtml(t.filename)}"${wasOpen.has(t.filename) ? " open" : ""}>
       <summary class="ot-bar">
         <span class="ot-name">${escapeHtml(t.filename)}</span>
         <span class="ot-sha">fingerprint ${escapeHtml((t.sha1 || "").slice(0, 10))}</span>
@@ -144,21 +165,44 @@ function otMsg(text, bad) {
   setTimeout(() => { if (el.dataset.msg === text) { el.textContent = ""; el.dataset.msg = ""; } }, 4000);
 }
 
-async function otSave(filename, content) {
+function otEntryMsg(name, text, bad) {
+  const el = document.querySelector(`[data-ot-msg="${CSS.escape(name)}"]`);
+  if (!el) { otMsg(text, bad); return; }
+  el.textContent = text;
+  el.dataset.msg = text;
+  el.className = `modal-msg ot-entry-msg ${bad ? "err" : "ok"}`;
+  if (!bad) {
+    setTimeout(() => { if (el.dataset.msg === text) { el.textContent = ""; el.dataset.msg = ""; } }, 4000);
+  }
+}
+
+function otSavedText(filename, saved) {
+  return saved.source === "default"
+    ? "No rows added: the built-in test is in force."
+    : `Saved '${filename}' ✓`;
+}
+
+async function otSave(filename, content, words, say) {
+  say = say || otMsg;
+  const payload = { filename, content };
+  if (typeof words === "string") payload.program_words = words;
   try {
     const r = await fetch("/api/config/official_tests", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename, content }),
+      body: JSON.stringify(payload),
     });
     const b = await r.json();
-    if (!r.ok) { otMsg(b.detail || "Save failed.", true); return false; }
-    otMsg(`Saved '${filename}' ✓`);
-    logEvent("settings_official_test_saved", { filename });
-    return true;
+    if (!r.ok) {
+      say(typeof b.detail === "string" ? b.detail : "Save failed.", true);
+      return null;
+    }
+    logEvent("settings_official_test_saved",
+             { filename, program_words: (b.program_extra || []).length });
+    return b;
   } catch (err) {
-    otMsg(`Network error: ${err}`, true);
-    return false;
+    say(`Network error: ${err}`, true);
+    return null;
   }
 }
 
@@ -212,7 +256,9 @@ async function otSave(filename, content) {
       const content = document.getElementById("ot-content").value || "";
       if (!name) { otMsg("Filename is required.", true); return; }
       if (!content.trim()) { otMsg("Testcase content is required.", true); return; }
-      if (await otSave(name, content)) {
+      const saved = await otSave(name, content);
+      if (saved) {
+        otMsg(otSavedText(name, saved));
         document.getElementById("ot-filename").value = "";
         document.getElementById("ot-content").value = "";
         renderOfficialTests();
@@ -226,7 +272,14 @@ async function otSave(filename, content) {
       if (save) {
         const name = save.dataset.otSave;
         const ta = list.querySelector(`textarea[data-ot-edit="${CSS.escape(name)}"]`);
-        if (ta && await otSave(name, ta.value)) renderOfficialTests();
+        if (!ta) return;
+        const wa = list.querySelector(`textarea[data-ot-words="${CSS.escape(name)}"]`);
+        const saved = await otSave(name, ta.value, wa ? wa.value : null,
+                                   (text, bad) => otEntryMsg(name, text, bad));
+        if (saved) {
+          await renderOfficialTests();
+          otEntryMsg(name, otSavedText(name, saved));
+        }
         return;
       }
       const del = evt.target.closest("[data-ot-del]");
@@ -240,6 +293,12 @@ async function otSave(filename, content) {
         } catch {}
         renderOfficialTests();
       }
+    });
+    list.addEventListener("focusout", (evt) => {
+      const box = evt.target;
+      if (!box || !box.matches || box.readOnly
+          || !box.matches("textarea[data-ot-words]")) return;
+      box.value = box.value.split(/[\s,]+/).filter(Boolean).join("\n");
     });
   }
   // the jar/key sections reuse the existing modals via their toolbar chips

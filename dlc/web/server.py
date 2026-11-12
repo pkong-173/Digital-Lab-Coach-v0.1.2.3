@@ -1491,6 +1491,7 @@ def clear_api_key_endpoint(provider: str) -> dict:
 class OfficialTestRequest(BaseModel):
     filename: str
     content: str
+    program_words: str | None = None
 
 
 @app.get("/api/config/official_tests")
@@ -1503,7 +1504,8 @@ def list_official_tests() -> dict:
 def save_official_test(req: OfficialTestRequest) -> dict:
     from dlc.l3 import official_store
     try:
-        entry = official_store.save_test(req.filename, req.content)
+        entry = official_store.save_test(
+            req.filename, req.content, program_extra=req.program_words)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True, **entry}

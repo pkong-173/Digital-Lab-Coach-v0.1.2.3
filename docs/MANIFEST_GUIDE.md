@@ -206,10 +206,16 @@ choice applies and the course key pays.
   official tests* after a Coverage Coach run ends **all set**; an adopted
   override can be deleted to return to the default.
 - A default marked `"editable": true` in `data/official_tests_defaults.json`
-  is the exception. Students may rewrite its rows in Settings; test runs 
-  then use their version, and *Delete override* brings the built-in rows back.
-  While an override is in force the registered ROM contents of that file are
-  not checked, because the student's rows may describe another program.
+  is the exception. Students add their own rows to it in Settings; test runs
+  then use their version, and *Delete override* brings the built-in test back.
+- Where the editable test runs a registered ROM program, it is extended. The 
+  header and the built-in rows stay in front, and every added row is saved 
+  with one instruction word (`0x` and up to 8 hex digits, one per line, in 
+  row order). The save is refused until the number of words equals the number
+  of added rows. The file's ROM must then hold the registered program followed
+  by those words; the registered words themselves are never listed. 
+  *Adopt into official tests* stores the same pair from the circuit Mode B 
+  verified. Details: [instructor_rom_config.md](instructor_rom_config.md).
 - Anyone may add official tests for their own labs (filename + testcase
   content, validated as Digital test format); those entries stay editable.
 - Manifests are files in the fork: giving a new lab its meaning is the

@@ -391,10 +391,27 @@ def l3_adopt_official(req: AdoptRequest) -> dict:
     lt = (session or {}).get("l3_temp") or {}
     spec = (next((s for s in specs if s.name == lt.get("spec_name")), None)
             or next((s for s in specs if s.rows), specs[0]))
-    saved = official_store.save_test(req.filename, spec.raw_data_string,
-                                     allow_default_override=True)
+    saved = official_store.save_test(
+        req.filename, spec.raw_data_string, allow_default_override=True,
+        program_extra=_adopted_program_words(req.filename, entry["path"],
+                                             spec.raw_data_string))
     return {"ok": True, "filename": req.filename, "sha1": saved["sha1"],
-            "rows": spec.row_count()}
+            "rows": spec.row_count(),
+            "program_words": len(saved.get("program_extra") or [])}
+
+
+def _adopted_program_words(filename: str, temp_path: str,
+                           content: str) -> list[str] | None:
+    from dlc.l3 import official_store
+    from dlc.testing.inject import appended_program_words
+    try:
+        words = appended_program_words(temp_path, filename)
+        if words is None:
+            return None
+        added = official_store.added_row_count(filename, content)
+        return words + ["0x00000000"] * (added - len(words))
+    except Exception:
+        return None
 
 
 class DebugRequest(BaseModel):
@@ -463,7 +480,7 @@ def llm_debug(req: DebugRequest) -> dict:
         path, spec_name, on_temp = lt["path"], lt.get("spec_name"), True
         coach_rows = lt.get("coach_rows") or None
 
-    gate = check_rom_contents(path, req.filename)
+    gate = check_rom_contents(path, req.filename, coach_temp=on_temp)
     if gate is not None:
         result = _rom_gate_result(gate, req.model, on_temp)
         _log_modeA_result(req.session_id, req.filename, result)
