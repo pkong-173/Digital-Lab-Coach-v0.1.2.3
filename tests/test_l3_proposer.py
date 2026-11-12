@@ -20,7 +20,6 @@ _AND = "data/sample_circuits/tier1_minimal/single_and.dig"
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path, monkeypatch):
     monkeypatch.setenv("DLC_LIMITS_PATH", str(tmp_path / "limits.json"))
-    monkeypatch.setenv("DLC_TELEMETRY_DB", str(tmp_path / "telemetry.db"))
     monkeypatch.delenv("DLC_ENFORCE_LIMITS", raising=False)
 
 

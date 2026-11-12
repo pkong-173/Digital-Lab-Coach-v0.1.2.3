@@ -1,5 +1,6 @@
 """
-Stable, anonymous machine identity for telemetry and limits.
+Stable, anonymous machine code: a hash of the operating system's machine
+identifier. The course server uses it to apply the daily limit per computer.
 """
 
 from __future__ import annotations

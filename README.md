@@ -28,7 +28,7 @@ v0.1.0 (2026/8/23): first packaged release.
 - [Which start flow are you?](#which-start-flow-are-you)
 - [Quick start (students)](#quick-start-students)
   - [Working offline](#working-offline)
-  - [Telemetry statement](#telemetry-statement)
+  - [Data statement](#data-statement)
   - [Uninstalling](#uninstalling)
 - [Instructor setup](#instructor-setup)
 - [File layout](#file-layout)
@@ -56,13 +56,11 @@ v0.1.0 (2026/8/23): first packaged release.
    `http://127.0.0.1:8765`. If macOS answers *permission denied*, run
    `chmod +x start.sh uninstall.sh` once in that folder and try again.
 
-3. Read the consent form that opens on the first start and choose Agree
-   or Decline.
-4. Walk through the tutor that opens next.
-5. `Digital.jar`: the first run asks where it is - the same jar you run
+3. Walk through the tutor that opens on the first start.
+4. `Digital.jar`: the first run asks where it is - the same jar you run
    labs with (see the Digital.jar section below if you don't have one). If
    you closed that dialog, it is under **Settings → Digital.jar**.
-6. Open **Settings (gear icon, top right)**:
+5. Open **Settings (gear icon, top right)**:
    - **Course server**: paste the **URL + course token** from your
      instructor and save; it answers *connected — token accepted ✓*. That
      powers all AI features. If your instructor announces a new URL or token
@@ -72,7 +70,7 @@ v0.1.0 (2026/8/23): first packaged release.
 
 ![Course server settings](docs/screenshots/settings_course_server.png)
 
-7. Upload your `.dig` files and start debugging: interactive graph, structural
+6. Upload your `.dig` files and start debugging: interactive graph, structural
    issues, per-row tests, signal flow, and the Layer 2/3 AI coach.
 
 ![A verified Mode A fix card](docs/screenshots/mode_a_card.png)
@@ -92,34 +90,26 @@ Everything deterministic — the graph, structural issues, per-row tests,
 signal flow, subcircuit drill-in, the Layer 2 walkthrough — works with no
 internet at all. Only the AI coach needs the course-server connection.
 
-### Telemetry Statement
+### Data statement
 
-DLC records anonymized usage events (feature clicks, Layer 1 verdicts, test
-runs, coach outcomes, and - between two uploads of the same file - how many
-components and wires changed and whether the edit touched what the coach had
-named; counts and element kinds only, never the circuit itself) keyed to a
-hashed machine id only. Related codes are public
-and stored at proxy/ and telemetry/, DLC never modifies a student's 
-uploaded files. Events sync to the course server for course-improvement research.
-This process begins if and only if admin gains IRB permission from the department. 
-When the course server declares a study, DLC asks each student once, on the
-first start after connecting, with the UNC information sheet
-(`data/consent/COMP311_fa26.md`). Only machines whose student agreed ever send
-events; a declined machine records nothing for the study. The course server
-counts every machine's AI requests under its hashed id to apply the daily
-limits, and keeps the AI's answers only for machines that agreed. Typed names
-and signatures are stored in a separate file from the usage data. A short
-optional feedback question follows some coach answers on agreed machines.
-The first round of experimental use is planned to be shut down around December.
+DLC does not record how you use it: no clicks, no test results, no file
+names, and it never modifies a student's uploaded files. What it writes on
+your computer is its own settings and today's count of AI coach uses.
+
+The only thing DLC sends about your work is an AI request. When you ask the
+AI coach, a description of the circuit you are working on goes to the course
+server, which passes it to the AI provider and passes the answer back. The
+course server stores neither of them. For each request it stores a hashed
+machine id, the time, the feature, the model, the token counts and whether
+the call worked (with the AI provider's error message if it did not): that is
+how the daily limit per computer and the course's spending cap are applied.
+The code is public in `proxy/` and `dlc/telemetry/`.
 
 When instructor's proxy server shuts down, DLC's AI features will be offline regardless
 of Internet connections. 
 
-Deleting and re-downloading the tool continues the same anonymous record. 
-
 DLC dev team is not responsible for any mis-behaviors of modifying students' files outside 
-UNC 311 classroom. You will need IRB permission from your department and work on your own fork
-of DLC in order to apply it to student and collect related student data. 
+UNC 311 classroom.
 
 ### Uninstalling
 
@@ -138,9 +128,6 @@ data folder `~/.dlc` and delete the unzipped folder.
 - **Operating the server, Appendix B**: rotating tokens, updating the code,
   backups, what breaks.
 
-Use the built-in data collection only with IRB approval from your
-department.
-
 ## File layout
 
 | Path | Role |
@@ -153,8 +140,8 @@ department.
 | `dlc/web/` | FastAPI server (`server.py`) + browser front-end (`static/`) for the web app: interactive graph, structural-issue overlay, per-row test runner, signal-flow-on-row-click, subcircuit drill-in, and the Layer 2/3 coach.
 | `dlc/l3/` | Layer 3: Mode A debugger (evidence, clustering, hypothesis verification) and Mode B coverage coach (manifests, program coach, row injection).
 | `dlc/llm/` | LLM client wrapper and versioned prompts for conceptual explanation + credibility grading (Layer 2) and strategic debugging (Layer 3).
-| `dlc/telemetry/` | Anonymous machine identity, per-interaction logging to a local SQLite spool, and the shipper that syncs it to the course proxy.
-| `proxy/` | The course proxy server an instructor deploys: API-key custody, per-machine daily limits (re-download-proof), global daily circuit breaker, telemetry ingest, admin dashboard/summary/export. `proxy/Dockerfile` and `proxy/openshift/` package it for Carolina CloudApps / OpenShift (Option B).
+| `dlc/telemetry/` | Anonymous machine identity: the hashed machine id the course proxy applies its daily limits to.
+| `proxy/` | The course proxy server an instructor deploys: API-key custody, per-machine daily limits, global daily circuit breaker, admin dashboard/summary/export. `proxy/Dockerfile` and `proxy/openshift/` package it for Carolina CloudApps / OpenShift (Option B).
 | `dlc/cli/` | Command-line entrypoint that wires the layers together.
 | `prompts/` | Versioned LLM prompt templates - one file per prompt variant, consumed by `dlc/llm/`.
 | `data/manifests/` | One manifest per lab (`cpu.json`, `cpu_new.json`, …): categories, subcircuit roles and models, program decode.

@@ -509,32 +509,32 @@ verified empirically:
   tables, own lookup tables) stays fully fixable — the guard keys on
   payload registration + isProgramMemory, nothing else.
 
-## Telemetry + course proxy (machine-keyed, re-download-proof)
+## Course proxy (machine-keyed, re-download-proof)
 
 - **Machine identity** (`dlc/telemetry/machine.py`): install_id =
   sha256("dlc-v1:" + OS machine id)[:16] — Windows MachineGuid, macOS
   IOPlatformUUID, Linux /etc/machine-id; stable fallback = hash of
   (platform, node, user). The cache file is a convenience only:
   deleting the tool/cache and re-downloading on the same machine
-  recomputes the SAME id, so records and limits continue. `issued`
+  recomputes the SAME id, so the limits continue. `issued`
   date stamps locally; the proxy keeps authoritative first_seen.
-- **Spool → ship**: events always land in the local SQLite sink first
-  (fully offline-capable), then `ship.py` batches everything past a
-  high-water mark to the proxy — at-least-once, deduped server-side on
-  (install_id, client_row_id), fire-and-forget threads from the app.
+- **No usage recording**: `logEvent` in the front end and `log_events`
+  in `dlc/telemetry/sink.py` keep nothing. The call sites still name what
+  happened; nothing is stored and nothing is sent.
 - **Proxy** (`proxy/dlc_proxy.py`): key custody (/v1/llm relays via
   the same client wrapper), per-machine per-day CALL budgets per
-  feature (v1 backstop: modeA 8, modeB 10 — generous inside client
-  limits, wipe-proof against re-downloads; v1.1 path = analysis-
-  granular limits with refunds), events ingest, /admin/summary +
-  /admin/export.csv. Client relays automatically when `proxy_url` is
-  configured, with direct-call fallback only if the proxy is
-  unreachable AND a local key exists.
+  feature (`CALL_BUDGETS`, wipe-proof against re-downloads), the
+  whole-class breaker, /admin/summary + /admin/export.csv. Client
+  relays automatically when `proxy_url` is configured, with direct-call
+  fallback only if the proxy is unreachable AND a local key exists.
+- **The ledger**: one row per relayed call — hashed machine id, time,
+  feature, model, ok, token counts, duration, and the provider's error
+  message when the call failed. No prompt and no answer. The token check
+  (`POST /v1/events`) notes the machine id and the day it was first seen;
+  any other POST under `/v1` is answered after the token check without
+  reading its body, so what an earlier app version still sends is dropped.
 - **Feature tags**: every call_llm site is tagged (modeA/modeB/grade/
   explain) so proxy budgets and usage accounting are per-feature.
-- **Server-side result events**: l3_modeA_result_server,
-  l3_modeB_result_server, l3_accept_fix_server — authoritative rows
-  (mode, cards, tokens, consumed) next to the FE click events.
 
 ## CPU-lab
 

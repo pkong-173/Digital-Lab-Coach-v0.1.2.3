@@ -12,14 +12,13 @@ Proxy operation and troubleshooting sit in
 DLC caps spend: 600 calls and $20 per day for the whole class by default,
 plus per-student and per-machine daily limits.
 
-## Step 2: Generate the course token and the admin tokens
+## Step 2: Generate the course token and the admin token
 
-Run these three lines in any terminal that has Python:
+Run these two lines in any terminal that has Python:
 
 ```bash
 python -c "import secrets; print('course-' + secrets.token_urlsafe(18))"
 python -c "import secrets; print('admin-'  + secrets.token_urlsafe(18))"
-python -c "import secrets; print('consent-' + secrets.token_urlsafe(18))"
 ```
 
 Fill in this **course card** and keep it in a private note for look up.
@@ -29,10 +28,9 @@ Fill in this **course card** and keep it in a private note for look up.
 | API key | `sk-ant-…` | the course server only |
 | Course token | `course-…` | students and you |
 | Admin token | `admin-…` | you only |
-| Consent-records password | `consent-…` | whoever may see students' names and signatures |
 | Course server URL | filled in at Step 4 | students and you |
 
-## Step 3: Put the four values into the course server
+## Step 3: Put the three values into the course server
 
 Pick one place to run the server:
 
@@ -54,9 +52,8 @@ view. You have exactly one project, named after your Onyen; it is
 only ITS can restore one (a ticket to CloudApps support).
 
 **3B.1 The Secret.** Left menu **Secrets** → **Create** → **Key/value
-secret**. Name `dlc-proxy-secrets`, then add four kv pairs from note:
-`ANTHROPIC_API_KEY`, `DLC_COURSE_TOKEN`, `DLC_ADMIN_TOKEN`,
-`DLC_CONSENT_ADMIN_TOKEN`. Create.
+secret**. Name `dlc-proxy-secrets`, then add three kv pairs from note:
+`ANTHROPIC_API_KEY`, `DLC_COURSE_TOKEN`, `DLC_ADMIN_TOKEN`. Create.
 
 **3B.2 Import the server.** **+Add** → **Import from Git**, fill in top to
 bottom, then **Create**:
@@ -70,7 +67,7 @@ bottom, then **Create**:
 | Application name / Name | `dlc` / `dlc-proxy` |
 | Build option | BuildConfig, advanced options untouched, its environment variables empty |
 | Resource type | Deployment |
-| Advanced Deployment option → Environment variables | **Add from ConfigMap or Secret** four times: Name `ANTHROPIC_API_KEY` from `dlc-proxy-secrets` key `ANTHROPIC_API_KEY`, the same for `DLC_COURSE_TOKEN`, `DLC_ADMIN_TOKEN` and `DLC_CONSENT_ADMIN_TOKEN`; then **Add value** twice: Name `DLC_STUDY_ID`, Value your IRB number, e.g. `26-2770`; Name `DLC_SURVEY_RATE`, Value `0.35` (leave both out while no study runs) |
+| Advanced Deployment option → Environment variables | **Add from ConfigMap or Secret** three times: Name `ANTHROPIC_API_KEY` from `dlc-proxy-secrets` key `ANTHROPIC_API_KEY`, the same for `DLC_COURSE_TOKEN` and `DLC_ADMIN_TOKEN` |
 | Target port | `8080` |
 | Create a route | ticked; advanced Routing: **Secure Route**, TLS termination **Edge**, Insecure traffic **Redirect**, everything else empty |
 
@@ -114,10 +111,7 @@ cd C:\path\to\DLC
 set ANTHROPIC_API_KEY=sk-ant-...
 set DLC_COURSE_TOKEN=course-...
 set DLC_ADMIN_TOKEN=admin-...
-set DLC_CONSENT_ADMIN_TOKEN=consent-...
 set DLC_PROXY_DB=C:\dlc-proxy\dlc_proxy.db
-set DLC_STUDY_ID=26-2770
-set DLC_SURVEY_RATE=0.35
 uv run uvicorn proxy.dlc_proxy:app --host 0.0.0.0 --port 8321
 ```
 
@@ -128,10 +122,7 @@ cd C:\path\to\DLC
 $env:ANTHROPIC_API_KEY = "sk-ant-..."
 $env:DLC_COURSE_TOKEN = "course-..."
 $env:DLC_ADMIN_TOKEN = "admin-..."
-$env:DLC_CONSENT_ADMIN_TOKEN = "consent-..."
 $env:DLC_PROXY_DB = "C:\dlc-proxy\dlc_proxy.db"
-$env:DLC_STUDY_ID = "26-2770"
-$env:DLC_SURVEY_RATE = "0.35"
 uv run uvicorn proxy.dlc_proxy:app --host 0.0.0.0 --port 8321
 ```
 
@@ -142,16 +133,9 @@ cd ~/path/to/DLC
 export ANTHROPIC_API_KEY=sk-ant-...
 export DLC_COURSE_TOKEN=course-...
 export DLC_ADMIN_TOKEN=admin-...
-export DLC_CONSENT_ADMIN_TOKEN=consent-...
 export DLC_PROXY_DB=$HOME/dlc-proxy/dlc_proxy.db
-export DLC_STUDY_ID=26-2770
-export DLC_SURVEY_RATE=0.35
 uv run uvicorn proxy.dlc_proxy:app --host 0.0.0.0 --port 8321
 ```
-
-`DLC_STUDY_ID` switches on the consent sheet and the feedback survey.
-Leave that line out while no study runs. `DLC_SURVEY_RATE` is the chance that a survey follows a coach answer
-(`0.35` above is the default; `1` when you test, `0` for no surveys).
 
 A clean start prints no `WARNING:` line. Then find the laptop's address on
 the network: Windows `ipconfig` (the IPv4 Address of the connected adapter),
@@ -169,12 +153,6 @@ read `true`:
 | `admin_token_set` | the dashboard rejects every admin token |
 | `key_configured` | students see "the course server has no API key configured" |
 | `key_format_ok` | the key was pasted wrong |
-
-`study_id` shows the IRB number when a study is on, `null` otherwise. With
-`null` no student is ever asked for consent and no usage data ever leaves a
-machine. `consent_token_set` is `true` once the consent-records password is
-set and differs from the admin token; until then nobody can download the
-typed names and signatures, and nothing else is affected.
 
 Option B: a `false` means an environment row in 3B.2 is missing or misnamed.
 Option A: a `false` means a `set` or `export` line was skipped; fix it and
@@ -196,17 +174,15 @@ To use DLC yourself, follow the README's Student quick setup with the same
 URL and token.
 
 The dashboard is the course server URL plus `/admin/view`, opened with the
-admin token: machines seen, activity per day, LLM calls and estimated spend
-against the caps, Layer 1 verdicts, test runs, and coach outcomes for both
-modes. Type the token into the page. The server counts every machine's AI 
-calls for the limits and keeps the AI's answer text only for machines that 
-agreed to the study. Typed names and signatures are in a separate file and 
-download from the Research tab with the consent-records password.
+admin token: machines seen, AI calls per day and per feature, and estimated
+spend against the caps. Type the token into the page. For each AI request the
+server keeps a hashed machine id, the time, the feature, the model, the token
+counts and, for a failed call, the provider's error message; the limits are
+computed from that. It keeps no prompts, no answers and nothing else about
+what a student does.
 
 ![Course dashboard](screenshots/admin_dashboard.png)
 ![Course dashboard, stats](screenshots/admin_dashboard2.png)
-
-Use the data collection only with IRB approval from your department.
 
 ## Student setup
 
@@ -275,12 +251,10 @@ Restart the app, or the server, after changing any of these.
 | To change… | Edit / set |
 |---|---|
 | Daily caps, per-machine budgets, whole-class breaker | A.2 |
-| Course token / admin token / consent-records password | server variables `DLC_COURSE_TOKEN`, `DLC_ADMIN_TOKEN`, `DLC_CONSENT_ADMIN_TOKEN`; the Secret `dlc-proxy-secrets`|
-| Where the server keeps its data | variable `DLC_PROXY_DB` (default `./dlc_proxy.db`; the container uses `/data/dlc_proxy.db` on its volume) for usage data; variable `DLC_CONSENT_DB` (default `dlc_consent.db` in the same folder) for the consent names and signatures |
+| Course token / admin token | server variables `DLC_COURSE_TOKEN`, `DLC_ADMIN_TOKEN`; the Secret `dlc-proxy-secrets`|
+| Where the server keeps its data | variable `DLC_PROXY_DB` (default `./dlc_proxy.db`; the container uses `/data/dlc_proxy.db` on its volume) |
 | Which model each Layer 3 mode uses | the picker on each Layer 3 board (Sonnet default or Opus, per run); the default comes from env `DLC_L3_DEBUG_MODEL` / `DLC_L3_PROPOSE_MODEL`, else `l3_debug_model` / `l3_propose_model` in `~/.dlc/config.json` |
 | LLM call timeout | env `DLC_LLM_TIMEOUT` (seconds, default 180). Option B: keep the route annotation from 3B.5 at least 60 seconds above it |
-| The research study on or off | env `DLC_STUDY_ID` on the server (the IRB number; unset = no study)|
-| How often the feedback survey asks | env `DLC_SURVEY_RATE` on the server (0–1, default `0.35` in `_survey_rate()` in `proxy/dlc_proxy.py`); the first-time rule, the 20-minute gap, the 2-per-session cap and the half rate for Layer 1 and the walkthrough are the constants at the top of `dlc/web/static/consent.js` |
 | Lecture list Layer 2 cites | `SYLLABUS_311` in `dlc/llm/explain.py` (A.3) |
 | Lab categories, subcircuit roles and formula models, program decode | one manifest per lab in `data/manifests/` ([MANIFEST_GUIDE.md](MANIFEST_GUIDE.md)) |
 | Files Mode A analyzes even when most rows fail | the `no_lazy_gate` list in that lab's manifest; the shipped CPU manifests list the control unit |

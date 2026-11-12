@@ -321,50 +321,15 @@ const gradeBody     = document.getElementById("grade-body");
 let lastGradedSummary = null;
 // Below this total, the grade panel suggests (but never auto-runs) a
 // fresh Summarize attempt. The old silent auto-retry was removed: it
-// re-spent tokens without consent and could replace a summary with a
+// re-spent tokens without asking and could replace a summary with a
 // worse one.
 const GRADE_HINT_THRESHOLD = 90;
 
 let sessionId = null;
 
-const eventLog = [];
-function logEvent(kind, details = {}) {
-  eventLog.push({ ts: Date.now(), kind, ...details });
-}
-window.dlcEventLog = eventLog;
-
-  /*# ───────────────────────────────────────────────────────────────────
-  *#  telemetry sink flush
-  *# ──────────────────────────────────────────────────────────────────#*/
-// Batch-persist dlcEventLog to /api/telemetry (local SQLite; see
-// dlc/telemetry/sink.py) every 15s and on page hide. Fire-and-forget:
-// telemetry must never affect the app, so failures are swallowed and a
-// batch is marked sent when handed off (at-most-once, no duplicates).
-let telemetrySentIdx = 0;
-function flushTelemetry(useBeacon = false) {
-  if (telemetrySentIdx >= eventLog.length) return;
-  const payload = JSON.stringify({
-    session_id: sessionId,
-    events: eventLog.slice(telemetrySentIdx),
-  });
-  telemetrySentIdx = eventLog.length;
-  try {
-    if (useBeacon && navigator.sendBeacon) {
-      navigator.sendBeacon(
-        "/api/telemetry", new Blob([payload], { type: "application/json" }),
-      );
-    } else {
-      fetch("/api/telemetry", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: payload,
-        keepalive: useBeacon,
-      }).catch(() => {});
-    }
-  } catch { /* never let telemetry break the app */ }
-}
-setInterval(flushTelemetry, 15000);
-window.addEventListener("pagehide", () => flushTelemetry(true));
+// Usage is not recorded. The calls across the app mark where an event
+// once was; this keeps them harmless: nothing is stored and nothing is sent.
+function logEvent(_kind, _details = {}) {}
 
 const MUTE_THRESHOLD = 3;
 let mutedByUser = new Set();   
@@ -565,12 +530,6 @@ async function postAll() {
       official_test_status: (f.summary && f.summary.official_test_status) || null,
     });
     if (f.reupload) logEvent("reupload_diff", { filename: f.filename, ...f.reupload });
-  }
-  {
-    const withErrors = loaded.find((f) => (f.issues || []).some((i) => i.severity === "error"));
-    if (withErrors && typeof dlcMaybeAskFeedback === "function") {
-      dlcMaybeAskFeedback("l1", withErrors.filename);
-    }
   }
   l3ExpireAll("re-upload");   // hypothesis cards die on re-upload (l3.debug.v1.1 §7)
   l2ForgetAll();
@@ -2774,9 +2733,6 @@ l2LlmBtn.addEventListener("click", async () => {
   }
   const payload = await res.json();
   logEvent("l2_llm_complete", { filename: file.filename, ok: payload.ok, gated: !!payload.gate_message });
-  if (payload.ok && !payload.gate_message && typeof dlcMaybeAskFeedback === "function") {
-    dlcMaybeAskFeedback("explain", file.filename);
-  }
 
   l2ForFile(file.filename, () => {
     if (!payload.ok) {
@@ -3161,9 +3117,6 @@ async function l2PlayWalkthrough() {
   if (!cy) return;
   logEvent("l2_walkthrough_played", { filename: file.filename, waves: walk.waves });
   l2WalkStart();
-  if (typeof dlcMaybeAskFeedback === "function") {
-    setTimeout(() => dlcMaybeAskFeedback("walkthrough", file.filename), 20000);
-  }
 }
 
 function l2WalkStart() {

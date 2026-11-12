@@ -57,24 +57,12 @@ from dlc.parser.pin_geometry import inverted_input_names
 
 from dlc.testing.spec import extract_test_specs
 from dlc.sim.simulator import RowReplay, simulate_sequential
-from dlc.telemetry.sink import log_events
 from dlc.web.graph_export import circuit_summary, to_cytoscape
-from dlc.version import __version__
 
 
 STATIC_DIR = Path(__file__).parent / "static"
 
-from contextlib import asynccontextmanager
-
-
-@asynccontextmanager
-async def _lifespan(app):
-    _telemetry_boot()
-    yield
-
-
-app = FastAPI(title="Digital Lab Coach", version="0.3.1",
-              lifespan=_lifespan)
+app = FastAPI(title="Digital Lab Coach", version="0.3.1")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 from dlc.web import l3_routes
@@ -149,10 +137,6 @@ class ApiKeyRequest(BaseModel):
     provider: str = "anthropic"
     key: str
 
-
-class TelemetryRequest(BaseModel):
-    session_id: str | None = None
-    events: list[dict] = []
 
 class LlmExplainRequest(BaseModel):
     session_id: str
@@ -1280,36 +1264,6 @@ def subcircuit_row(req: SubcircuitRequest) -> dict:
         "depth": len(req.path),
     }
 
-_last_ship_attempt = 0.0
-
-
-def _ship_soon() -> None:
-    global _last_ship_attempt
-    now = time.time()
-    if now - _last_ship_attempt < 20:
-        return
-    _last_ship_attempt = now
-
-    def _run():
-        try:
-            from dlc.telemetry.ship import ship_all
-            ship_all()
-        except Exception:
-            pass
-    import threading
-    threading.Thread(target=_run, daemon=True).start()
-
-
-@app.post("/api/telemetry")
-def telemetry(req: TelemetryRequest) -> dict:
-    try:
-        stored = log_events(req.session_id, req.events)
-    except Exception as exc:
-        return {"ok": False, "stored": 0,
-                "warning": f"{type(exc).__name__}: {exc}"}
-    _ship_soon()
-    return {"ok": True, "stored": stored}
-
 
 @app.get("/api/machine")
 def machine_info() -> dict:
@@ -1320,86 +1274,20 @@ def machine_info() -> dict:
     return {**ident, "proxy_configured": bool(url)}
 
 
-def _telemetry_boot() -> None:
-    try:
-        from dlc.telemetry.machine import machine_identity
-        ident = machine_identity()
-        log_events(None, [{
-            "kind": "app_start",
-            "install_id": ident["install_id"],
-            "issued": ident["issued"],
-            "id_source": ident["source"],
-            "version": __version__,
-        }])
-    except Exception:
-        pass
-
-    def _refresh_study():
-        try:
-            from dlc.telemetry import consent
-            consent.study_info(refresh=True)
-        except Exception:
-            pass
-    threading.Thread(target=_refresh_study, daemon=True).start()
-    _ship_soon()
-
-
-# research
-# The consent sheet ships with the tool; the course server says whether a
-# study is on (its /v1/health carries study_id). See dlc/telemetry/consent.py.
-
-class ConsentRequest(BaseModel):
-    decision: str
-    name: str | None = None
-    signature: str | None = None
-
-
-@app.get("/api/consent/state")
-def consent_state(refresh: bool = False) -> dict:
-    from dlc.telemetry import consent
-    return consent.public_state(refresh=refresh)
-
-
-@app.get("/api/consent/text")
-def consent_text_endpoint():
-    from fastapi.responses import PlainTextResponse
-    from dlc.telemetry import consent
-    return PlainTextResponse(consent.consent_text())
-
-
-@app.post("/api/consent")
-def consent_decide(req: ConsentRequest) -> dict:
-    from dlc.telemetry import consent
-    try:
-        out = consent.record(req.decision, req.name or "", req.signature)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    if out["decision"] == "agreed":
-        try:
-            log_events(None, [{"kind": "consent_recorded",
-                               "decision": "agreed",
-                               "version": out["version"],
-                               "study_id": consent.study_info().get("study_id")}])
-        except Exception:
-            pass
-    _ship_soon()
-    return {**out, "state": consent.public_state()}
-
-
-
 class ProxyConfigRequest(BaseModel):
     url: str | None = None
     token: str | None = None
 
 
 def _verify_course_server(url: str, token: str | None) -> str:
-    """Ping the proxy with the saved token: an empty events batch is a
-    free authenticated request. Returns accepted / bad_token / unreachable."""
+    """Ask the course server whether it accepts the saved token. The request
+    carries the machine code and nothing else. Returns accepted / bad_token /
+    unreachable."""
     try:
         import httpx
         from dlc.telemetry.machine import install_id
         r = httpx.post(f"{url}/v1/events",
-                       json={"install_id": install_id(), "events": []},
+                       json={"install_id": install_id()},
                        headers={"X-DLC-Token": token or ""}, timeout=5.0)
         if r.status_code == 401:
             return "bad_token"
@@ -1436,12 +1324,6 @@ def set_proxy_config(req: ProxyConfigRequest) -> dict:
     if url:
         out["verify"] = _verify_course_server(
             cfg.get("proxy_url", ""), cfg.get("proxy_token"))
-    if url:
-        try:
-            from dlc.telemetry import consent
-            out["study_id"] = consent.study_info(refresh=True).get("study_id")
-        except Exception:
-            pass
     return out
 
 

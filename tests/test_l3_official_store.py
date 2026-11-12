@@ -221,7 +221,6 @@ def _upload(*paths):
 
 def test_adopt_official_requires_a_verified_temp(monkeypatch, tmp_path):
     monkeypatch.setenv("DLC_LIMITS_PATH", str(tmp_path / "limits.json"))
-    monkeypatch.setenv("DLC_TELEMETRY_DB", str(tmp_path / "telemetry.db"))
     sid = _upload(_AND)
     try:
         r = client.post("/api/l3/adopt_official", json={
@@ -238,7 +237,6 @@ def test_adopt_official_merges_the_temp_spec(monkeypatch, tmp_path):
     from dlc.testing.spec import extract_test_specs
     from dlc.l3.oracle import InjectedRow, write_temp_with_rows
     monkeypatch.setenv("DLC_LIMITS_PATH", str(tmp_path / "limits.json"))
-    monkeypatch.setenv("DLC_TELEMETRY_DB", str(tmp_path / "telemetry.db"))
     sid = _upload(_AND)
     try:
         session = server._SESSIONS[sid]

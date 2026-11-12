@@ -469,20 +469,12 @@ page refresh; switching tabs keeps them. Navigating away during a run
 asks for confirmation because it resets the boards. The server keeps no
 cards; it keeps only the coach temp registration.
 
-## 9. Telemetry events
+## 9. Usage events
 
-Client (`dlc/telemetry/sink.py` via `POST /api/telemetry`):
-`l3_modeA_started{filename, model}` · `l3_modeA_run_complete{filename,
-mode, cards, llm_calls}` or `{filename, ok: false}` ·
-`l3_hint_level{rank, level: 2}` on every "Show me more" ·
-`l3_fix_animation_played{rank}` · `l3_fix_accepted{rank, all_passed}` ·
-`l3_fix_drillin_opened{depth}` · `l3_modeA_row_viewed{filename, row}` ·
-`l3_modeA_rerun_clicked` · `l3_circuit_re_uploaded` (a re-upload wiped a
-non-empty store).
-
-Server: `l3_modeA_result_server{filename, mode, cards, confirmed,
-llm_calls, in_tokens, out_tokens, model, rom_verified, consumed_use}` ·
-`l3_accept_fix_server{filename, n_ops, all_passed, injected}`.
+Not recorded. The front end names what happened at each step
+(`logEvent(kind, details)`) and so does the server at three places
+(`log_events` in `dlc/telemetry/sink.py`), but both functions keep
+nothing: no event is stored and none is sent.
 
 ## 10. Limits and model selection
 

@@ -1115,10 +1115,6 @@ async function l3ProposeClick() {
     filename: file.filename, ok: !!body.ok,
     n_rows: (body.proposals || []).reduce((n, g) => n + g.rows.length, 0),
   });
-  if (body.ok && (body.proposals || []).length
-      && typeof dlcMaybeAskFeedback === "function") {
-    dlcMaybeAskFeedback("modeB", file.filename);
-  }
   if (l3PageVisible() && loaded[currentIdx]
       && loaded[currentIdx].filename === file.filename) {
     renderL3Boards(loaded[currentIdx]);
@@ -1596,9 +1592,6 @@ async function l3RunModeA() {
       filename, mode: body.mode,
       cards: (body.cards || []).length, llm_calls: body.llm_calls || 0,
     });
-    if ((body.cards || []).length && typeof dlcMaybeAskFeedback === "function") {
-      dlcMaybeAskFeedback("modeA", filename);
-    }
   } else {
     const warn = failText || (body && (body.warning || body.error))
       || "Analysis failed.";

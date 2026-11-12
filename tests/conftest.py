@@ -23,8 +23,3 @@ def _isolated_llm_client_config(tmp_path, monkeypatch):
     for var in ("DLC_PROXY_URL", "DLC_PROXY_TOKEN",
                 "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
         monkeypatch.delenv(var, raising=False)
-    # the research consent decision and the study cache are per-machine
-    # files too; a test must never read or write the developer's own
-    monkeypatch.setenv("DLC_CONSENT_PATH", str(tmp_path / "consent.json"))
-    monkeypatch.setenv("DLC_STUDY_CACHE", str(tmp_path / "study.json"))
-    monkeypatch.delenv("DLC_LOCAL_STUDY_ID", raising=False)

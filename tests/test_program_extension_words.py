@@ -22,7 +22,6 @@ W1, W2 = "0x00628433", "0x40628533"
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path, monkeypatch):
     monkeypatch.setenv("DLC_LIMITS_PATH", str(tmp_path / "limits.json"))
-    monkeypatch.setenv("DLC_TELEMETRY_DB", str(tmp_path / "telemetry.db"))
     monkeypatch.delenv("DLC_ENFORCE_LIMITS", raising=False)
 
 

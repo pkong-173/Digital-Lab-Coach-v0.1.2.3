@@ -2,7 +2,7 @@
 rem Digital Lab Coach uninstall (Windows). macOS/Linux users: run ./uninstall.sh instead.
 title Digital Lab Coach - uninstall
 echo This removes Digital Lab Coach's local data folder:
-echo   %USERPROFILE%\.dlc  (settings, machine-id cache, telemetry spool)
+echo   %USERPROFILE%\.dlc  (settings, machine-id cache, daily limit count)
 echo.
 echo NOTE: your course usage limits live on the course server and are
 echo keyed to this machine - uninstalling or re-downloading never

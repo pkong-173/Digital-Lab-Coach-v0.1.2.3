@@ -5,8 +5,7 @@
 #     oc create secret generic dlc-proxy-secrets \
 #         --from-literal=ANTHROPIC_API_KEY=sk-ant-... \
 #         --from-literal=DLC_COURSE_TOKEN=course-... \
-#         --from-literal=DLC_ADMIN_TOKEN=admin-... \
-#         --from-literal=DLC_CONSENT_ADMIN_TOKEN=consent-...
+#         --from-literal=DLC_ADMIN_TOKEN=admin-...
 #     oc apply -f proxy/openshift/dlc-proxy.yaml
 #     oc start-build dlc-proxy --follow          # builds proxy/Dockerfile from GitHub
 #     oc get route dlc-proxy                     # the URL students paste (https://...)

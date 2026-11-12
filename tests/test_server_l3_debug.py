@@ -13,7 +13,6 @@ _BUG3 = "data/sample_circuits/30_bug_benchmark/bug3_wrong_cin/Wrong_cin.dig"
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path, monkeypatch):
     monkeypatch.setenv("DLC_LIMITS_PATH", str(tmp_path / "limits.json"))
-    monkeypatch.setenv("DLC_TELEMETRY_DB", str(tmp_path / "telemetry.db"))
     monkeypatch.delenv("DLC_ENFORCE_LIMITS", raising=False)
 
 

@@ -21,7 +21,6 @@ _CALC_DIR = "data/sample_circuits/30_bug_benchmark/bug1_meaningless_mux_in3"
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path, monkeypatch):
     monkeypatch.setenv("DLC_LIMITS_PATH", str(tmp_path / "limits.json"))
-    monkeypatch.setenv("DLC_TELEMETRY_DB", str(tmp_path / "telemetry.db"))
     monkeypatch.delenv("DLC_ENFORCE_LIMITS", raising=False)
 
 def test_counters_tick_even_when_unenforced():

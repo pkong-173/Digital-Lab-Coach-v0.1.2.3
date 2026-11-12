@@ -1,36 +1,41 @@
 """
-Telemetry chain: machine identity -> local spool -> ship ->
-course proxy (limits, ingest, dedup) -> client relay routing.
+Machine identity -> course proxy (key custody, limits, the ledger) ->
+client relay routing.
+
+The proxy keeps one row per AI request under the hashed machine id. 
+Several tests here read the database file itself to hold it to that.
 """
 
 import json
 import os
 import sqlite3
-import time
-from datetime import date
 
 import pytest
 from fastapi.testclient import TestClient
 
 import dlc.llm.client as lc
 from dlc.telemetry import machine as mach
-from dlc.telemetry import ship, sink
+
+M1 = "a1" * 8
+M2 = "b2" * 8
+ADM = {"X-DLC-Admin-Token": "adm"}
+LEDGER_COLUMNS = ["id", "install_id", "day", "ts", "feature", "model", "ok",
+                  "in_tokens", "out_tokens", "ms", "error"]
+# the three in the middle are never filled
+MACHINE_COLUMNS = ["install_id", "first_seen", "issued_client", "id_source",
+                   "app_version", "last_seen"]
+EMPTY = "issued_client IS NULL AND id_source IS NULL AND app_version IS NULL"
 
 
 @pytest.fixture()
 def tele_env(tmp_path, monkeypatch):
-    monkeypatch.setenv("DLC_TELEMETRY_DB", str(tmp_path / "tele.db"))
     monkeypatch.setenv("DLC_MACHINE_CACHE", str(tmp_path / "machine.json"))
-    monkeypatch.setenv("DLC_CONSENT_PATH", str(tmp_path / "consent.json"))
-    monkeypatch.setenv("DLC_STUDY_CACHE", str(tmp_path / "study.json"))
     monkeypatch.setenv("DLC_PROXY_DB", str(tmp_path / "proxy.db"))
     monkeypatch.delenv("DLC_PROXY_URL", raising=False)
     monkeypatch.setenv("DLC_COURSE_TOKEN", "tok")
     monkeypatch.setenv("DLC_PROXY_TOKEN", "tok")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.delenv("DLC_ADMIN_TOKEN", raising=False)
-    monkeypatch.delenv("DLC_CONSENT_ADMIN_TOKEN", raising=False)
-    monkeypatch.delenv("DLC_CONSENT_DB", raising=False)
     monkeypatch.delenv("DLC_GLOBAL_DAILY_CALLS", raising=False)
     monkeypatch.delenv("DLC_GLOBAL_DAILY_USD", raising=False)
     return tmp_path
@@ -59,6 +64,15 @@ def test_machine_id_stable_fallback_without_os_guid(tele_env, monkeypatch):
     assert mach.machine_identity()["install_id"] == a["install_id"]
 
 
+def test_machine_id_is_a_hash_that_does_not_contain_its_source(
+        tele_env, monkeypatch):
+    monkeypatch.setattr(mach, "_raw_machine_identifier",
+                        lambda: "4C4C4544-0042-RAW-GUID")
+    code = mach.install_id()
+    assert len(code) == 16 and set(code) <= set("0123456789abcdef")
+    assert "4c4c" not in code and "RAW" not in code
+
+
 # proxy app
 
 def _proxy_client(monkeypatch, upstream=None):
@@ -73,24 +87,41 @@ def _proxy_client(monkeypatch, upstream=None):
     return TestClient(dlc_proxy.app, headers={"X-DLC-Token": "tok"})
 
 
-def test_proxy_ingest_dedup_and_first_seen(tele_env, monkeypatch):
-    pc = _proxy_client(monkeypatch)
-    batch = {"install_id": "m1", "issued": "2026-08-01",
-             "id_source": "os", "app_version": "0.1.0",
-             "events": [{"client_row_id": 1, "kind": "upload",
-                         "props": {"count": 2}},
-                        {"client_row_id": 2, "kind": "tests_run_complete",
-                         "props": {}}]}
-    assert pc.post("/v1/events", json=batch).json()["ok"] is True
-    pc.post("/v1/events", json=batch)
-    h = pc.get("/v1/health").json()
-    assert h["machines"] == 1 and h["events"] == 2
+def _body(machine=M1, feature="modeA", **over):
+    return {"install_id": machine, "feature": feature,
+            "model": "claude-opus-5", "prompt": "hi", **over}
 
-    monkeypatch.setenv("DLC_ADMIN_TOKEN", "adm")
-    s = pc.get("/admin/summary", headers={"X-DLC-Admin-Token": "adm"}).json()
-    assert s["machines"][0]["install_id"] == "m1"
-    assert s["machines"][0]["first_seen"]
-    assert s["machines"][0]["issued_client"] == "2026-08-01"
+
+def _rows(sql, args=()):
+    conn = sqlite3.connect(os.environ["DLC_PROXY_DB"])
+    try:
+        return conn.execute(sql, args).fetchall()
+    finally:
+        conn.close()
+
+
+def _columns(table):
+    return [r[1] for r in _rows(f"PRAGMA table_info({table})")]
+
+
+def _count(table):
+    """Rows in a ledger table; 0 when the proxy never opened its database."""
+    try:
+        return _rows(f"SELECT COUNT(*) FROM {table}")[0][0]
+    except sqlite3.OperationalError:
+        return 0
+
+
+def _tables():
+    return {r[0] for r in _rows(
+        "SELECT name FROM sqlite_master WHERE type = 'table'"
+        " AND name NOT LIKE 'sqlite_%'")}
+
+
+def _file_bytes(tmp_path):
+    """Everything the proxy wrote: the database and any side file."""
+    return b"".join(p.read_bytes() for p in sorted(tmp_path.iterdir())
+                    if p.name.startswith("proxy.db"))
 
 
 def test_proxy_budget_survives_redownload_and_separates_machines(
@@ -98,26 +129,21 @@ def test_proxy_budget_survives_redownload_and_separates_machines(
     from proxy import dlc_proxy
     monkeypatch.setattr(dlc_proxy, "CALL_BUDGETS", {"modeA": 2})
     pc = _proxy_client(monkeypatch)
-    body = {"install_id": "mach-A", "feature": "modeA",
-            "model": "claude-opus-5", "prompt": "hi"}
-    assert pc.post("/v1/llm", json=body).json()["ok"] is True
-    assert pc.post("/v1/llm", json=body).json()["ok"] is True
-    third = pc.post("/v1/llm", json=body).json()
+    assert pc.post("/v1/llm", json=_body()).json()["ok"] is True
+    assert pc.post("/v1/llm", json=_body()).json()["ok"] is True
+    third = pc.post("/v1/llm", json=_body()).json()
     assert third["ok"] is False and third["limit_hit"] is True
     pc2 = _proxy_client(monkeypatch)
-    again = pc2.post("/v1/llm", json=body).json()
+    again = pc2.post("/v1/llm", json=_body()).json()
     assert again["ok"] is False and again["limit_hit"] is True
-    other = dict(body, install_id="mach-B")
-    assert pc2.post("/v1/llm", json=other).json()["ok"] is True
+    assert pc2.post("/v1/llm", json=_body(M2)).json()["ok"] is True
 
 
 def test_proxy_course_token_gate(tele_env, monkeypatch):
     monkeypatch.setenv("DLC_COURSE_TOKEN", "sekrit")
     pc = _proxy_client(monkeypatch)
-    body = {"install_id": "m", "feature": "modeA",
-            "model": "claude-opus-5", "prompt": "hi"}
-    assert pc.post("/v1/llm", json=body).status_code == 401
-    ok = pc.post("/v1/llm", json=body,
+    assert pc.post("/v1/llm", json=_body()).status_code == 401
+    ok = pc.post("/v1/llm", json=_body(),
                  headers={"X-DLC-Token": "sekrit"})
     assert ok.status_code == 200 and ok.json()["ok"] is True
 
@@ -126,13 +152,11 @@ def test_proxy_refuses_every_request_without_a_course_token(tele_env,
                                                             monkeypatch):
     monkeypatch.delenv("DLC_COURSE_TOKEN", raising=False)
     pc = _proxy_client(monkeypatch)
-    body = {"install_id": "m", "feature": "modeA",
-            "model": "claude-opus-5", "prompt": "hi"}
-    assert pc.post("/v1/llm", json=body).status_code == 503
-    assert pc.post("/v1/llm", json=body,
+    assert pc.post("/v1/llm", json=_body()).status_code == 503
+    assert pc.post("/v1/llm", json=_body(),
                    headers={"X-DLC-Token": "anything"}).status_code == 503
-    batch = {"install_id": "m", "events": []}
-    assert pc.post("/v1/events", json=batch).status_code == 503
+    assert pc.post("/v1/events", json={"install_id": M1}).status_code == 503
+    assert pc.post("/v1/anything", json={}).status_code == 503
     h = pc.get("/v1/health")
     assert h.status_code == 200
     assert h.json()["course_token_set"] is False
@@ -140,7 +164,7 @@ def test_proxy_refuses_every_request_without_a_course_token(tele_env,
 
     monkeypatch.setenv("DLC_COURSE_TOKEN", "tok")
     monkeypatch.setenv("DLC_ADMIN_TOKEN", "adm")
-    assert pc.post("/v1/events", json=batch).status_code == 200
+    assert pc.post("/v1/events", json={"install_id": M1}).status_code == 200
     h = pc.get("/v1/health").json()
     assert h["course_token_set"] is True and h["admin_token_set"] is True
 
@@ -150,9 +174,7 @@ def test_relay_names_a_missing_server_key_and_spends_nothing(tele_env,
     import dlc.llm.client as real
     monkeypatch.setattr(real, "get_api_key", lambda p="anthropic": "")
     pc = _proxy_client(monkeypatch)
-    body = {"install_id": "m", "feature": "modeA",
-            "model": "claude-opus-5", "prompt": "hi"}
-    r = pc.post("/v1/llm", json=body)
+    r = pc.post("/v1/llm", json=_body())
     assert r.status_code == 200
     out = r.json()
     assert out["ok"] is False and out["server_misconfigured"] is True
@@ -160,117 +182,153 @@ def test_relay_names_a_missing_server_key_and_spends_nothing(tele_env,
     assert pc.get("/v1/health").json()["today_calls"] == 0
 
 
-def _reinstall_batches():
-    def batch(rows, t0):
-        return {"install_id": "same-laptop", "events": [
-            {"client_row_id": i, "client_ts": t0 + i, "kind": k,
-             "props": {"n": i}} for i, k in rows]}
-    week1 = batch([(1, "upload"), (2, "tests_run_complete"),
-                   (3, "l3_hint_level")], 1000.0)
-    after = batch([(1, "upload"), (2, "l2_llm_complete"),
-                   (3, "l3_fix_accepted")], 2000.0)
-    return week1, after
+# what the proxy keeps
+
+def test_the_ledger_holds_request_counts_and_nothing_else(tele_env,
+                                                          monkeypatch):
+    def upstream(prompt, **kw):
+        return {"ok": True, "text": "ANSWER-TEXT-7731 use an XOR gate",
+                "error": None,
+                "usage": {"input_tokens": 321, "output_tokens": 45},
+                "model": kw.get("model")}
+    pc = _proxy_client(monkeypatch, upstream)
+    out = pc.post("/v1/llm", json=_body(
+        prompt="PROMPT-TEXT-5512 my_cpu_final.dig fails row 3",
+        system="SYSTEM-TEXT-9904")).json()
+    # the student still gets the answer
+    assert out["ok"] is True and "ANSWER-TEXT-7731" in out["text"]
+
+    assert _tables() == {"machines", "llm_calls"}
+    assert _columns("llm_calls") == LEDGER_COLUMNS
+    assert _columns("machines") == MACHINE_COLUMNS
+    assert _rows(f"SELECT install_id FROM machines WHERE {EMPTY}") == [(M1,)]
+    (row,) = _rows("SELECT install_id, feature, model, ok, in_tokens,"
+                   " out_tokens, error FROM llm_calls")
+    assert row == (M1, "modeA", "claude-opus-5", 1, 321, 45, None)
+
+    raw = _file_bytes(tele_env)
+    for text in (b"PROMPT-TEXT-5512", b"my_cpu_final", b"SYSTEM-TEXT-9904",
+                 b"ANSWER-TEXT-7731", b"XOR gate"):
+        assert text not in raw
 
 
-def test_events_survive_a_student_reinstall(tele_env, monkeypatch):
+def test_the_token_check_notes_the_machine_code_and_nothing_else(
+        tele_env, monkeypatch):
     pc = _proxy_client(monkeypatch)
-    week1, after = _reinstall_batches()
-    assert pc.post("/v1/events", json=week1).json()["stored"] == 3
-    assert pc.post("/v1/events", json=after).json()["stored"] == 3
-    assert pc.get("/v1/health").json()["events"] == 6
-    assert pc.post("/v1/events", json=after).json()["stored"] == 0
-    assert pc.get("/v1/health").json()["events"] == 6
+    # an earlier app version sends much more on this path
+    batch = {"install_id": M1, "issued": "2026-08-01", "id_source": "os",
+             "app_version": "9.8.7-MARK",
+             "events": [{"client_row_id": 1, "kind": "upload",
+                         "props": {"filename": "EVENT-TEXT-4410.dig"}}]}
+    assert pc.post("/v1/events", json=batch).json() == {"ok": True,
+                                                        "stored": 0}
+    assert pc.post("/v1/events", json={"install_id": M2}).json()["ok"] is True
+    assert pc.post("/v1/events", json=batch,
+                   headers={"X-DLC-Token": "wrong"}).status_code == 401
+    assert pc.post("/v1/events", json={"install_id": ""}).status_code == 400
+
+    assert _tables() == {"machines", "llm_calls"}
+    assert _columns("machines") == MACHINE_COLUMNS
+    assert _rows(f"SELECT install_id FROM machines WHERE {EMPTY}"
+                 " ORDER BY install_id") == [(M1,), (M2,)]
+    assert _count("llm_calls") == 0
+    raw = _file_bytes(tele_env)
+    for text in (b"EVENT-TEXT-4410", b"9.8.7-MARK", b"2026-08-01", b"upload"):
+        assert text not in raw
 
 
-def test_events_key_migrates_an_old_ledger(tele_env, monkeypatch):
-    old = sqlite3.connect(os.environ["DLC_PROXY_DB"])
-    with old:
-        old.executescript("""
-CREATE TABLE events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    install_id TEXT NOT NULL, client_row_id INTEGER NOT NULL,
-    session_id TEXT, kind TEXT NOT NULL, client_ts REAL, stored_at REAL,
-    received_at REAL NOT NULL, props TEXT NOT NULL,
-    UNIQUE(install_id, client_row_id));
-INSERT INTO events (install_id, client_row_id, kind, client_ts,
-                    received_at, props)
-    VALUES ('same-laptop', 1, 'upload', 1001.0, 5.0, '{}'),
-           ('same-laptop', 2, 'tests_run_complete', 1002.0, 5.0, '{}'),
-           ('same-laptop', 3, 'l3_hint_level', 1003.0, 5.0, '{}');
-""")
-    old.close()
+def test_anything_else_posted_under_v1_is_checked_and_dropped(tele_env,
+                                                              monkeypatch):
     pc = _proxy_client(monkeypatch)
-    assert pc.get("/v1/health").json()["events"] == 3
-    _, after = _reinstall_batches()
-    assert pc.post("/v1/events", json=after).json()["stored"] == 3
-    assert pc.get("/v1/health").json()["events"] == 6
+    body = {"install_id": M1, "name": "TYPED-NAME-8831",
+            "picture": "data:image/png;base64,PICTURE-MARK-5520"}
+    for path in ("/v1/retired-path", "/v1/another_one"):
+        assert pc.post(path, json=body).json() == {"ok": True, "stored": 0}
+        assert pc.post(path, json=body,
+                       headers={"X-DLC-Token": "wrong"}).status_code == 401
+    # the body is never read: it does not even have to be JSON
+    assert pc.post("/v1/retired-path", content=b"\x00not json").status_code == 200
+    assert _count("machines") == 0 and _count("llm_calls") == 0
+    raw = _file_bytes(tele_env)
+    assert b"TYPED-NAME-8831" not in raw and b"PICTURE-MARK-5520" not in raw
+    # the real routes are not shadowed
+    assert pc.post("/v1/llm", json=_body()).json()["ok"] is True
+    assert pc.get("/v1/health").json()["today_calls"] == 1
+
+
+def test_the_server_answers_only_these_paths(tele_env, monkeypatch):
+    from proxy import dlc_proxy
+    paths = {r.path for r in dlc_proxy.app.routes}
+    framework = {"/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"}
+    assert paths - framework == {
+        "/v1/llm", "/v1/events", "/v1/{name}", "/v1/health",
+        "/admin/summary", "/admin/daily", "/admin/stats",
+        "/admin/export.csv", "/admin/view"}
+
+
+def test_health_reports_only_configuration_and_counts(tele_env, monkeypatch):
+    pc = _proxy_client(monkeypatch)
+    assert set(pc.get("/v1/health").json()) == {
+        "ok", "machines", "db_path", "key_configured", "key_format_ok",
+        "course_token_set", "admin_token_set", "today_calls",
+        "today_est_usd", "global_daily_calls", "global_daily_usd"}
+
+
+_OLD_DATABASE = """
+CREATE TABLE machines (install_id TEXT PRIMARY KEY, first_seen TEXT NOT NULL,
+    issued_client TEXT, id_source TEXT, app_version TEXT, last_seen REAL);
+CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT,
+    install_id TEXT NOT NULL, client_row_id INTEGER NOT NULL, kind TEXT NOT NULL,
+    received_at REAL NOT NULL, props TEXT NOT NULL);
+CREATE TABLE llm_calls (id INTEGER PRIMARY KEY AUTOINCREMENT,
+    install_id TEXT NOT NULL, day TEXT NOT NULL, ts REAL NOT NULL,
+    feature TEXT NOT NULL, model TEXT, ok INTEGER, in_tokens INTEGER,
+    out_tokens INTEGER, ms INTEGER, error TEXT, response TEXT);
+CREATE INDEX idx_llm_budget ON llm_calls(install_id, feature, day);
+"""
+
+
+def test_a_database_from_an_earlier_version_keeps_working(tele_env,
+                                                          monkeypatch):
+    """The file is used as it is: the counts carry on, and nothing else an
+    earlier version left in it is served by any route."""
+    from proxy import dlc_proxy
+    monkeypatch.setenv("DLC_ADMIN_TOKEN", "adm")
+    day = dlc_proxy._today().isoformat()
     conn = sqlite3.connect(os.environ["DLC_PROXY_DB"])
-    (sql,) = conn.execute("SELECT sql FROM sqlite_master WHERE name='events'"
-                          ).fetchone()
-    assert "stored_at)" in sql.replace(" ", "")
-    (mx,) = conn.execute("SELECT MAX(id) FROM events").fetchone()
-    conn.close()
-    assert mx == 6
-
-
-def test_fresh_spool_never_reuses_shipped_row_ids(tele_env, monkeypatch):
-    sink.log_events("s", [{"kind": "upload"}, {"kind": "upload"}])
-    conn = sink._connect()
-    first = [r[0] for r in conn.execute("SELECT id FROM events ORDER BY id")]
-    conn.close()
-    assert first[0] > 10**12 and first[1] == first[0] + 1
-    os.remove(os.environ["DLC_TELEMETRY_DB"])          # UNINSTALL
-    time.sleep(0.002)
-    sink.log_events("s", [{"kind": "upload"}])
-    conn = sink._connect()
-    (again,) = conn.execute("SELECT MIN(id) FROM events").fetchone()
-    conn.close()
-    assert again > first[-1]
-
-
-def test_ship_moves_spool_to_proxy_and_survives_offline(tele_env,
-                                                        monkeypatch):
-    monkeypatch.setattr(mach, "_raw_machine_identifier", lambda: "G-1")
-    from dlc.telemetry import consent
-    consent.record("agreed", name="Test Student")
-    sink.log_events("sess1", [{"kind": "upload", "count": 1},
-                              {"kind": "tests_run_complete", "ok": True}])
-    assert ship.ship_pending()["reason"] == "no_proxy"
-
-    pc = _proxy_client(monkeypatch)
-    monkeypatch.setenv("DLC_PROXY_URL", "http://course.example")
-
-    class _Resp:
-        def __init__(self, code, body):
-            self.status_code = code
-            self._body = body
-        def json(self):
-            return self._body
-
-    def fake_post(url, json=None, headers=None, timeout=None):
-        assert url == "http://course.example/v1/events"
-        r = pc.post("/v1/events", json=json, headers=headers)
-        return _Resp(r.status_code, r.json())
-
-    import httpx
-    monkeypatch.setattr(httpx, "post", fake_post)
-    out = ship.ship_pending()
-    assert out["reason"] == "ok" and out["shipped"] == 2
-    assert pc.get("/v1/health").json()["events"] == 2
-
-    assert ship.ship_pending()["reason"] == "up_to_date"
-    conn = sqlite3.connect(str(tele_env / "tele.db"))
+    conn.executescript(_OLD_DATABASE)
     with conn:
-        conn.execute("UPDATE ship_state SET last_shipped = 0")
+        conn.execute("INSERT INTO machines VALUES (?,?,?,?,?,?)",
+                     (M1, "2026-10-01", "2026-09-30", "os", "9.8.7-MARK", 50.0))
+        conn.execute("INSERT INTO events (install_id, client_row_id, kind,"
+                     " received_at, props) VALUES (?,?,?,?,?)",
+                     (M1, 1, "upload", 1.0, '{"filename": "OLD-EVENT-1188"}'))
+        for i in range(3):
+            conn.execute(
+                "INSERT INTO llm_calls (install_id, day, ts, feature, model,"
+                " ok, in_tokens, out_tokens, ms, error, response)"
+                " VALUES (?,?,?,?,?,1,100,20,900,NULL,?)",
+                (M1, day, 10.0 + i, "modeA", "claude-opus-5",
+                 f"OLD-ANSWER-2277-{i}"))
     conn.close()
-    assert ship.ship_pending()["shipped"] == 2
-    assert pc.get("/v1/health").json()["events"] == 2
 
-    def dead_post(*a, **kw):
-        raise OSError("no route to host")
-    monkeypatch.setattr(httpx, "post", dead_post)
-    sink.log_events("sess1", [{"kind": "upload"}])
-    assert ship.ship_pending()["shipped"] == 0
+    monkeypatch.setattr(dlc_proxy, "CALL_BUDGETS", {"modeA": 4})
+    pc = _proxy_client(monkeypatch)
+    assert pc.get("/v1/health").json()["today_calls"] == 3
+    # the three earlier calls still count against today's budget
+    assert pc.post("/v1/llm", json=_body()).json()["ok"] is True
+    assert pc.post("/v1/llm", json=_body()).json()["limit_hit"] is True
+    assert _count("llm_calls") == 4
+
+    served = pc.get("/v1/health").text + pc.get("/admin/view").text
+    for path in ("/admin/summary", "/admin/daily", "/admin/stats",
+                 "/admin/export.csv", "/admin/export.csv?table=machines"):
+        r = pc.get(path, headers=ADM)
+        assert r.status_code == 200, path
+        served += r.text
+    for text in ("OLD-EVENT-1188", "OLD-ANSWER-2277", "9.8.7-MARK",
+                 "2026-09-30"):
+        assert text not in served
 
 
 # client relay routing
@@ -303,6 +361,10 @@ def test_call_llm_routes_through_proxy_when_configured(tele_env,
     assert seen["feature"] == "modeA"
     assert len(seen["install_id"]) == 16
     assert seen["model"] == "claude-opus-5"
+    # the request carries the machine code and what the model needs
+    assert set(seen) - {"url"} == {"install_id", "feature", "model",
+                                   "prompt", "system", "max_tokens",
+                                   "effort"}
 
 
 def test_call_llm_goes_direct_inside_the_proxy_process(tele_env,
@@ -351,19 +413,17 @@ def test_budget_counts_inflight_reservations(tele_env, monkeypatch):
     from proxy import dlc_proxy
     monkeypatch.setattr(dlc_proxy, "CALL_BUDGETS", {"modeA": 2})
     pc = _proxy_client(monkeypatch)
-    body = {"install_id": "m-rsv", "feature": "modeA",
-            "model": "claude-opus-5", "prompt": "hi"}
-    assert pc.post("/v1/llm", json=body).json()["ok"] is True
+    assert pc.post("/v1/llm", json=_body()).json()["ok"] is True
     conn = sqlite3.connect(os.environ["DLC_PROXY_DB"])
     with conn:
         conn.execute(
             "INSERT INTO llm_calls (install_id, day, ts, feature, model, "
             "ok, in_tokens, out_tokens, ms, error) "
             "VALUES (?,?,?,?,?,0,NULL,NULL,NULL,'pending')",
-            ("m-rsv", dlc_proxy._today().isoformat(), 0.0, "modeA",
+            (M1, dlc_proxy._today().isoformat(), 0.0, "modeA",
              "claude-opus-5"))
     conn.close()
-    out = pc.post("/v1/llm", json=body).json()
+    out = pc.post("/v1/llm", json=_body()).json()
     assert out["ok"] is False and out["limit_hit"] is True
 
 
@@ -395,12 +455,9 @@ def test_debugger_tags_modeA_feature(tele_env):
 def test_global_capacity_breaker_across_machines(tele_env, monkeypatch):
     monkeypatch.setenv("DLC_GLOBAL_DAILY_CALLS", "2")
     pc = _proxy_client(monkeypatch)
-    a = {"install_id": "mach-A", "feature": "modeA",
-         "model": "claude-opus-5", "prompt": "hi"}
-    assert pc.post("/v1/llm", json=a).json()["ok"] is True
-    assert pc.post("/v1/llm", json=a).json()["ok"] is True
-    b = dict(a, install_id="mach-B")
-    out = pc.post("/v1/llm", json=b).json()
+    assert pc.post("/v1/llm", json=_body(M1)).json()["ok"] is True
+    assert pc.post("/v1/llm", json=_body(M1)).json()["ok"] is True
+    out = pc.post("/v1/llm", json=_body(M2)).json()
     assert out["ok"] is False
     assert out.get("capacity_hit") is True
     assert "daily capacity" in out["error"]
@@ -412,28 +469,29 @@ def test_limit_message_dropped_redownload_sentence(tele_env, monkeypatch):
     from proxy import dlc_proxy
     monkeypatch.setattr(dlc_proxy, "CALL_BUDGETS", {"modeA": 1})
     pc = _proxy_client(monkeypatch)
-    body = {"install_id": "m-msg", "feature": "modeA",
-            "model": "claude-opus-5", "prompt": "hi"}
-    assert pc.post("/v1/llm", json=body).json()["ok"] is True
-    out = pc.post("/v1/llm", json=body).json()
+    assert pc.post("/v1/llm", json=_body()).json()["ok"] is True
+    out = pc.post("/v1/llm", json=_body()).json()
     assert out["limit_hit"] is True
     assert "resets tomorrow" in out["error"]
     assert "Re-downloading" not in out["error"]
 
 
+# the admin side
+
 def test_admin_header_auth_daily_and_dashboard(tele_env, monkeypatch):
     monkeypatch.setenv("DLC_ADMIN_TOKEN", "adm")
     pc = _proxy_client(monkeypatch)
-    body = {"install_id": "m-dash", "feature": "modeA",
-            "model": "claude-opus-5", "prompt": "hi"}
-    assert pc.post("/v1/llm", json=body).json()["ok"] is True
+    assert pc.post("/v1/llm", json=_body()).json()["ok"] is True
 
     assert pc.get("/admin/summary").status_code == 401
-    s = pc.get("/admin/summary", headers={"X-DLC-Admin-Token": "adm"})
+    s = pc.get("/admin/summary", headers=ADM)
     assert s.status_code == 200
+    assert s.json()["machines"] == [{
+        "install_id": M1, "first_seen": s.json()["machines"][0]["first_seen"],
+        "last_seen": s.json()["machines"][0]["last_seen"], "llm_calls": 1}]
 
-    d = pc.get("/admin/daily", headers={"X-DLC-Admin-Token": "adm"}).json()
-    assert d["llm"][0]["install_id"] == "m-dash"
+    d = pc.get("/admin/daily", headers=ADM).json()
+    assert d["llm"][0]["install_id"] == M1
     assert d["llm"][0]["calls"] == 1
     assert d["spend_by_day"] and "est_usd" in d["spend_by_day"][0]
 
@@ -441,6 +499,76 @@ def test_admin_header_auth_daily_and_dashboard(tele_env, monkeypatch):
     assert page.status_code == 200
     assert "dashboard" in page.text.lower()
     assert "X-DLC-Admin-Token" in page.text
+
+
+def test_a_token_in_the_web_address_is_refused(tele_env, monkeypatch):
+    monkeypatch.setenv("DLC_ADMIN_TOKEN", "adm")
+    pc = _proxy_client(monkeypatch)
+    for path in ("/admin/summary", "/admin/daily", "/admin/stats",
+                 "/admin/export.csv"):
+        assert pc.get(path, params={"token": "adm"}).status_code == 401
+        assert pc.get(path).status_code == 401
+        assert pc.get(path, headers=ADM).status_code == 200
+    page = pc.get("/admin/view").text
+    assert "token=" not in page
+    assert 'type="password"' in page
+
+
+def test_admin_stats_and_exports_come_from_the_ledger(tele_env, monkeypatch):
+    monkeypatch.setenv("DLC_ADMIN_TOKEN", "adm")
+    pc = _proxy_client(monkeypatch)
+    for machine, feature in ((M1, "modeA"), (M1, "modeA"), (M1, "explain"),
+                             (M2, "modeB")):
+        assert pc.post("/v1/llm",
+                       json=_body(machine, feature)).json()["ok"] is True
+
+    st = pc.get("/admin/stats", params={"range_days": 7}, headers=ADM).json()
+    assert set(st) == {"since", "range_days", "totals", "active_by_day",
+                       "by_feature", "spend_by_day"}
+    assert st["totals"]["active_machines"] == 2
+    assert st["totals"]["new_machines"] == 2
+    assert st["totals"]["llm_calls"] == 4 and st["totals"]["ok_calls"] == 4
+    assert st["totals"]["in_tokens"] == 40
+    assert st["active_by_day"][-1]["machines"] == 2
+    assert st["active_by_day"][-1]["calls"] == 4
+    assert {f["feature"]: f["calls"] for f in st["by_feature"]} == {
+        "modeA": 2, "explain": 1, "modeB": 1}
+
+    usage = pc.get("/admin/export.csv", headers=ADM)
+    assert usage.status_code == 200
+    lines = usage.text.lstrip("\ufeff").strip().splitlines()
+    assert lines[0] == ("day,install_id,feature,calls,ok_calls,in_tokens,"
+                        "out_tokens")
+    # one line per day, machine and feature: the rows the dashboard shows
+    assert sorted(ln.split(",")[1:4] for ln in lines[1:]) == [
+        [M1, "explain", "1"], [M1, "modeA", "2"], [M2, "modeB", "1"]]
+    machines = pc.get("/admin/export.csv", params={"table": "machines"},
+                      headers=ADM).text.lstrip("\ufeff").strip().splitlines()
+    assert machines[0] == "install_id,first_seen,last_seen"
+    assert {ln.split(",")[0] for ln in machines[1:]} == {M1, M2}
+    for table in ("llm_calls", "events", "sqlite_master"):
+        assert pc.get("/admin/export.csv", params={"table": table},
+                      headers=ADM).status_code == 400
+
+
+def test_export_cells_cannot_act_as_formulas_or_break_rows(tele_env,
+                                                           monkeypatch):
+    """The relay stores the machine code and the feature as sent, so a
+    hand-made request can put any text there."""
+    monkeypatch.setenv("DLC_ADMIN_TOKEN", "adm")
+    pc = _proxy_client(monkeypatch)
+    odd_machine = '=HYPERLINK("http://x")'
+    assert pc.post("/v1/llm", json=_body(odd_machine,
+                                         "line one\rline two")).json()["ok"]
+    assert pc.post("/v1/llm", json=_body("@SUM(1)", "+plus")).json()["ok"]
+    text = pc.get("/admin/export.csv", headers=ADM).text.lstrip("\ufeff")
+    import csv
+    import io
+    rows = list(csv.reader(io.StringIO(text, newline="")))
+    assert len(rows) == 3
+    cells = {(r[1], r[2]) for r in rows[1:]}
+    assert cells == {("'" + odd_machine, "line one\rline two"),
+                     ("'@SUM(1)", "'+plus")}
 
 
 def test_proxy_401_maps_to_settings_guidance(tele_env, monkeypatch):
@@ -462,7 +590,6 @@ def test_proxy_401_maps_to_settings_guidance(tele_env, monkeypatch):
 
 
 def test_saving_course_server_verifies_token(tele_env, monkeypatch):
-    from fastapi.testclient import TestClient
     from dlc.web.server import app as webapp
     monkeypatch.setattr(mach, "_raw_machine_identifier", lambda: "G-4")
     wc = TestClient(webapp)
@@ -475,12 +602,25 @@ def test_saving_course_server_verifies_token(tele_env, monkeypatch):
 
     import httpx
     replies = {"code": 200}
-    monkeypatch.setattr(
-        httpx, "post", lambda *a, **kw: _R(replies["code"]))
+    sent = []
+
+    def fake_post(url, **kw):
+        sent.append((url, kw))
+        return _R(replies["code"])
+    monkeypatch.setattr(httpx, "post", fake_post)
 
     body = {"url": "http://course.example", "token": "tok"}
     assert wc.post("/api/config/proxy",
-                   json=body).json()["verify"] == "accepted"
+                   json=body).json() == {"ok": True, "configured": True,
+                                         "verify": "accepted"}
+    # the check sends the token and the machine code, nothing else
+    url, kw = sent[-1]
+    assert url == "http://course.example/v1/events"
+    assert kw.get("headers") == {"X-DLC-Token": "tok"}
+    assert set(kw["json"]) == {"install_id"}
+    assert len(kw["json"]["install_id"]) == 16
+    assert not {"data", "content", "params"} & set(kw)
+
     replies["code"] = 401
     assert wc.post("/api/config/proxy",
                    json=body).json()["verify"] == "bad_token"
@@ -501,44 +641,21 @@ def test_saving_course_server_verifies_token(tele_env, monkeypatch):
     assert out == {"ok": True, "configured": False}
 
 
-def test_admin_events_feed_filters_and_pagination(tele_env, monkeypatch):
-    monkeypatch.setenv("DLC_ADMIN_TOKEN", "adm")
+def test_the_app_and_the_proxy_agree_on_the_token_check(tele_env,
+                                                        monkeypatch):
+    from dlc.web import server as web
     pc = _proxy_client(monkeypatch)
-    for mach_id, rows in (("m-one", 4), ("m-two", 2)):
-        pc.post("/v1/events", json={
-            "install_id": mach_id,
-            "events": [{"client_row_id": i,
-                        "kind": "upload" if i % 2 else "tests_run_started",
-                        "props": {"count": i, "filename": f"f{i}.dig"}}
-                       for i in range(1, rows + 1)]})
+    import httpx
 
-    assert pc.get("/admin/events").status_code == 401
-    hdr = {"X-DLC-Admin-Token": "adm"}
-
-    d = pc.get("/admin/events", headers=hdr).json()
-    assert d["total"] == 6
-    assert set(d["machines"]) == {"m-one", "m-two"}
-    assert set(d["kinds"]) == {"upload", "tests_run_started"}
-    assert d["days"] and d["rows"][0]["id"] > d["rows"][-1]["id"]
-    assert isinstance(d["rows"][0]["props"], dict)
-    assert d["rows"][0]["time"]
-
-    d = pc.get("/admin/events", headers=hdr,
-               params={"kind": "upload"}).json()
-    assert d["total"] == 3
-    assert all(r["kind"] == "upload" for r in d["rows"])
-
-    d = pc.get("/admin/events", headers=hdr,
-               params={"install_id": "m-two"}).json()
-    assert d["total"] == 2
-
-    d = pc.get("/admin/events", headers=hdr,
-               params={"per_page": 2, "page": 3}).json()
-    assert d["total"] == 6 and len(d["rows"]) == 2
-
-    d = pc.get("/admin/events", headers=hdr,
-               params={"day": "1999-01-01"}).json()
-    assert d["total"] == 0 and d["rows"] == []
+    def through(url, json=None, headers=None, timeout=None):
+        assert url.startswith("http://course.example/")
+        return pc.post(url[len("http://course.example"):], json=json,
+                       headers=headers)
+    monkeypatch.setattr(httpx, "post", through)
+    assert web._verify_course_server("http://course.example", "tok") \
+        == "accepted"
+    assert web._verify_course_server("http://course.example", "nope") \
+        == "bad_token"
 
 
 def test_health_reports_effective_key_not_just_env(tele_env, monkeypatch):
@@ -549,156 +666,6 @@ def test_health_reports_effective_key_not_just_env(tele_env, monkeypatch):
     h = pc.get("/v1/health").json()
     assert h["key_configured"] is True
     assert h["key_format_ok"] is True
-
-
-def test_llm_texts_feed_stores_and_filters_responses(tele_env,
-                                                     monkeypatch):
-    monkeypatch.setenv("DLC_ADMIN_TOKEN", "adm")
-
-    def upstream(prompt, **kw):
-        return {"ok": True,
-                "text": json.dumps({
-                    "contract": "l3.debug.v1.1", "confidence": 0.8,
-                    "hint": {"why": "carry-in stuck"},
-                    "fix": {"ops": [{"op": "change_attribute"}],
-                            "explanation_for_student": "flip the const"}}),
-                "error": None,
-                "usage": {"input_tokens": 9, "output_tokens": 4},
-                "stop_reason": "end_turn", "model": kw.get("model")}
-    pc = _proxy_client(monkeypatch, upstream=upstream)
-    pc.post("/v1/consent", json={"install_id": "m-txt", "decision": "agreed",
-                                 "name": "Ada Lovelace", "version": "v1"})
-    for feat in ("modeA", "explain", "explain"):
-        pc.post("/v1/llm", json={"install_id": "m-txt", "feature": feat,
-                                 "model": "claude-opus-5", "prompt": "p"})
-
-    assert pc.get("/admin/llm_texts").status_code == 401
-    hdr = {"X-DLC-Admin-Token": "adm"}
-    d = pc.get("/admin/llm_texts", headers=hdr).json()
-    assert d["total"] == 3
-    assert set(d["features"]) == {"modeA", "explain"}
-    assert "explanation_for_student" in d["rows"][0]["response"]
-    assert d["rows"][0]["time"]
-
-    d = pc.get("/admin/llm_texts", headers=hdr,
-               params={"feature": "explain"}).json()
-    assert d["total"] == 2
-    d = pc.get("/admin/llm_texts", headers=hdr,
-               params={"per_page": 2, "page": 2}).json()
-    assert d["total"] == 3 and len(d["rows"]) == 1
-
-
-def test_llm_response_column_migrates_old_db(tele_env, monkeypatch):
-    import os as _os
-    db = _os.environ["DLC_PROXY_DB"]
-    conn = sqlite3.connect(db)
-    with conn:
-        conn.execute(
-            "CREATE TABLE llm_calls (id INTEGER PRIMARY KEY AUTOINCREMENT,"
-            " install_id TEXT NOT NULL, day TEXT NOT NULL, ts REAL NOT"
-            " NULL, feature TEXT NOT NULL, model TEXT, ok INTEGER,"
-            " in_tokens INTEGER, out_tokens INTEGER, ms INTEGER,"
-            " error TEXT)")
-    conn.close()
-    pc = _proxy_client(monkeypatch)
-    body = {"install_id": "m-old", "feature": "modeA",
-            "model": "claude-opus-5", "prompt": "hi"}
-    pc.post("/v1/consent", json={"install_id": "m-old", "decision": "agreed",
-                                 "name": "Ada Lovelace", "version": "v1"})
-    assert pc.post("/v1/llm", json=body).json()["ok"] is True
-    monkeypatch.setenv("DLC_ADMIN_TOKEN", "adm")
-    d = pc.get("/admin/llm_texts",
-               headers={"X-DLC-Admin-Token": "adm"}).json()
-    assert d["total"] == 1 and d["rows"][0]["response"] == "{}"
-
-
-def test_admin_stats_windows_and_l3_outcomes(tele_env, monkeypatch):
-    monkeypatch.setenv("DLC_ADMIN_TOKEN", "adm")
-    pc = _proxy_client(monkeypatch)
-    pc.post("/v1/events", json={
-        "install_id": "m-st", "events": [
-            {"client_row_id": 1, "kind": "upload", "props": {"count": 1}},
-            {"client_row_id": 2, "kind": "l3_modeA_result_server",
-             "props": {"filename": "a.dig", "cards": 2,
-                       "confirmed": True, "llm_calls": 1}},
-            {"client_row_id": 3, "kind": "l3_modeA_result_server",
-             "props": {"filename": "b.dig", "cards": 0,
-                       "confirmed": False, "llm_calls": 1}},
-            {"client_row_id": 6, "kind": "l3_modeA_result_server",
-             "props": {"filename": "c.dig", "mode": "rom_mismatch",
-                       "cards": 0, "confirmed": 0, "llm_calls": 0}},
-            {"client_row_id": 7, "kind": "l1_result",
-             "props": {"filename": "a.dig", "errors": 2, "warnings": 1,
-                       "kinds": ["width_mismatch"], "unsupported": False,
-                       "failed": False, "testcase_rows": 8}},
-            {"client_row_id": 8, "kind": "l1_result",
-             "props": {"filename": "b.dig", "errors": 0, "warnings": 0,
-                       "kinds": [], "unsupported": True, "failed": False,
-                       "testcase_rows": 4}},
-            {"client_row_id": 9, "kind": "tests_run_complete",
-             "props": {"filename": "a.dig", "mode": "per_row", "ok": True,
-                       "all_passed": False, "failing_rows": 3,
-                       "total_rows": 8}},
-            {"client_row_id": 10, "kind": "reupload_diff",
-             "props": {"filename": "a.dig", "comps_changed": 1,
-                       "wires_changed": 0, "had_suspects": True,
-                       "touched_suspect": True}},
-            {"client_row_id": 11, "kind": "l3_locked",
-             "props": {"filename": "b.dig", "reason": "l1_errors",
-                       "errors": 2}},
-            {"client_row_id": 4, "kind": "l3_modeB_result_server",
-             "props": {"filename": "a.dig", "proposals": 3, "rows": 5,
-                       "disputed": 2, "rejected": 1,
-                       "rejected_kinds": {"duplicate": 1},
-                       "covered": False}},
-            {"client_row_id": 12, "kind": "l3_modeB_inject_outcome",
-             "props": {"file": "a.dig", "outcome": "rows_fail", "added": 5,
-                       "failed": 2, "disputed": 2, "disputed_failed": 1,
-                       "clean_failed": 1}},
-            {"client_row_id": 13, "kind": "l3_modeB_adopted_official",
-             "props": {"file": "a.dig", "rows": 9}},
-            {"client_row_id": 5, "kind": "l3_accept_fix_server",
-             "props": {"filename": "a.dig"}}]})
-    pc.post("/v1/events", json={
-        "install_id": "m-st2", "events": [
-            {"client_row_id": 1, "kind": "upload", "props": {}}]})
-    for feat in ("modeA", "explain"):
-        pc.post("/v1/llm", json={"install_id": "m-st", "feature": feat,
-                                 "model": "claude-opus-5", "prompt": "p"})
-
-    assert pc.get("/admin/stats").status_code == 401
-    hdr = {"X-DLC-Admin-Token": "adm"}
-    d = pc.get("/admin/stats", headers=hdr).json()
-    assert d["range_days"] == 7 and d["since"] <= d["active_by_day"][0]["day"]
-    t = d["totals"]
-    assert t["active_machines"] == 2 and t["events"] == 14
-    assert d["l1"] == {"files": 2, "with_errors": 1, "unsupported": 1,
-                       "failed": 0, "avg_test_rows": 6.0}
-    assert d["tests"] == {"runs": 1, "all_passed": 0,
-                          "avg_failing_rows": 3.0}
-    assert t["llm_calls"] == 2 and t["ok_calls"] == 2
-    assert t["est_usd"] >= 0
-    l3 = d["l3"]
-    assert l3["modeA_runs"] == 2 and l3["modeA_confirmed"] == 1
-    assert l3["modeA_refused"] == {"rom_mismatch": 1, "l1_locked": 1}
-    assert l3["hint_targeting"] == {"reuploads": 1, "touched_suspect": 1,
-                                    "touched_card": 0}
-    assert l3["modeA_cards"] == 2
-    assert l3["modeB_runs"] == 1 and l3["fixes_accepted"] == 1
-    assert l3["modeB"] == {"rows": 5, "disputed": 2, "rejected": 1,
-                           "covered": 0, "accepts": 1, "rows_accepted": 5,
-                           "rows_failed": 2, "clean_failed": 1,
-                           "adopted": 1, "adopted_rows": 9}
-    feats = {f["feature"]: f for f in d["by_feature"]}
-    assert feats["modeA"]["calls"] == 1 and feats["explain"]["calls"] == 1
-    assert d["active_by_day"][0]["machines"] == 2
-    assert any(k["kind"] == "upload" and k["n"] == 2
-               for k in d["top_kinds"])
-    d30 = pc.get("/admin/stats", headers=hdr,
-                 params={"range_days": 30}).json()
-    assert d30["range_days"] == 30 and d30["totals"]["events"] == 14
-    assert pc.get("/admin/stats", headers=hdr,
-                  params={"range_days": 0}).status_code == 422
 
 
 def test_health_names_the_database_file(tele_env, monkeypatch):

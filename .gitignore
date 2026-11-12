@@ -25,6 +25,8 @@ student_data/
 spring2026_archive/
 ta_archive/
 dlc_proxy.db*
+*.db
+*.db-*
 
 # IDE
 .vscode/
@@ -44,6 +46,3 @@ dlc_row_*.dig
 
 # First-run tutor marker (per-install; a fresh download resets it)
 .dlc_tutor_done
-
-# Linkage file with consent names and signatures (course proxy)
-dlc_consent.db*

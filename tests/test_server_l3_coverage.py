@@ -2,7 +2,6 @@
 tree-wide wrong-test scan + coverage report. Evaluator-only — no jar.
 """
 
-import pytest
 from fastapi.testclient import TestClient
 
 from dlc.web import server
@@ -11,11 +10,6 @@ from dlc.web.server import app
 client = TestClient(app)
 
 _CALC_DIR = "data/sample_circuits/30_bug_benchmark/bug1_meaningless_mux_in3"
-
-
-@pytest.fixture(autouse=True)
-def _tmp_db(tmp_path, monkeypatch):
-    monkeypatch.setenv("DLC_TELEMETRY_DB", str(tmp_path / "telemetry.db"))
 
 
 def _upload(*paths):

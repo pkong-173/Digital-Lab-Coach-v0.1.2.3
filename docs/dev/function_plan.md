@@ -44,7 +44,7 @@
 |---|---|:-:|
 | F17 | UI design | Ongoing. **Layer 1 signal-flow-on-row-click — Done**: clicking a test row colors every wire by value (1-bit green bright/dark, multi-bit blue + hex label, unresolved gray), real Digital component SVG glyphs, per-component reactions (7-seg lighting, mux/decoder selected-port ring, register value), a user-triggered clock-tick that steps signal flow through the remaining rows, a recursive subcircuit **drill-in** overlay, and a "snow storm" clear-page animation | Done |
 | F18 | Ablation condition controller | Done |
-| F19 | Telemetry logger & Proxy Server | Done — local SQLite spool + shipper (`dlc/telemetry/`), course proxy with key custody, machine-keyed budgets, breaker and admin dashboard (`proxy/`) |
+| F19 | Proxy Server | Done — course proxy with key custody, machine-keyed budgets, breaker and admin dashboard (`proxy/`); the hashed machine id comes from `dlc/telemetry/`. Usage events are not recorded |
 | F20 | Digital source-code dig (Path-3 plugin viability) | Waived |
 | F21 | Evaluation harness | L2 benchmark harness and the L1/L3 bug-benchmark ablation harness done; Layer 3 quality is tracked by hand on the L3 benchmark sheet (live Mode A runs per release) |
 | F22 | CLI interface | Done (`dlc/cli/`) |

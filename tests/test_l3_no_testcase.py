@@ -37,7 +37,6 @@ _TESTCASE_RE = re.compile(
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path, monkeypatch):
     monkeypatch.setenv("DLC_LIMITS_PATH", str(tmp_path / "limits.json"))
-    monkeypatch.setenv("DLC_TELEMETRY_DB", str(tmp_path / "telemetry.db"))
     monkeypatch.setenv("DLC_OFFICIAL_TESTS_PATH", str(tmp_path / "official.json"))
     monkeypatch.delenv("DLC_ENFORCE_LIMITS", raising=False)
 

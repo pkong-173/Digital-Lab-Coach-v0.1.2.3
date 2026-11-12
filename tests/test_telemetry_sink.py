@@ -1,14 +1,7 @@
-"""
-Telemetry SQLite sink (dlc/telemetry/sink.py), the /api/telemetry
-endpoint, and the session/job GC TTLs (dlc/web/server.py).
-
-Every test points DLC_TELEMETRY_DB at a pytest tmp dir so nothing ever 
-writes to the developers or students' real ~/.dlc.
-"""
-
+import re
 import time
+from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
 from dlc.telemetry import sink
@@ -16,66 +9,70 @@ from dlc.web import server
 from dlc.web.server import app
 
 client = TestClient(app)
+STATIC = Path(server.__file__).parent / "static"
+SAMPLE = "data/sample_circuits/tier1_minimal/single_and.dig"
 
 
-@pytest.fixture(autouse=True)
-def _tmp_db(tmp_path, monkeypatch):
-    monkeypatch.setenv("DLC_TELEMETRY_DB", str(tmp_path / "telemetry.db"))
-
-def test_log_events_stores_kind_ts_and_details():
+def test_log_events_keeps_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.chdir(tmp_path)
     n = sink.log_events("sess1", [
-        {"ts": 1751800000000, "kind": "l3_modeA_started", "row_count": 3},
-        {"ts": 1751800001000, "kind": "tab_switch", "tab": "l3"},
+        {"ts": 1751800000000, "kind": "l3_modeA_started",
+         "filename": "cpu.dig"},
+        {"kind": "tab_switch", "tab": "l3"},
     ])
-    assert n == 2
-    events = sink.recent_events()
-    assert len(events) == 2
-    newest = events[0]
-    assert newest["kind"] == "tab_switch"
-    assert newest["session_id"] == "sess1"
-    assert newest["details"] == {"tab": "l3"}
-    assert abs(newest["client_ts"] - 1751800001.0) < 1e-6
-    assert "2025" in newest["when"]
+    assert n == 0
+    assert list(tmp_path.rglob("*")) == []
 
 
-def test_log_events_skips_malformed_entries_without_failing_the_batch():
-    n = sink.log_events(None, [
-        "not-a-dict",
-        {"no_kind": True},
-        {"kind": "ok_event"},
-        {"kind": "weird", "blob": object()},
-    ])
-    assert n == 2
-    kinds = {e["kind"] for e in sink.recent_events()}
-    assert kinds == {"ok_event", "weird"}
-    weird = next(e for e in sink.recent_events() if e["kind"] == "weird")
-    assert weird["details"] == {"unserializable": True}
-
-
-def test_recent_events_filters_by_kind_and_handles_missing_db(tmp_path, monkeypatch):
-    sink.log_events("s", [{"kind": "a"}, {"kind": "b"}, {"kind": "a"}])
-    assert len(sink.recent_events(kind="a")) == 2
-    monkeypatch.setenv("DLC_TELEMETRY_DB", str(tmp_path / "nowhere" / "t.db"))
-    assert sink.recent_events() == []
-
-def test_telemetry_endpoint_stores_batch():
+def test_the_app_has_no_route_that_takes_usage_events():
     r = client.post("/api/telemetry", json={
-        "session_id": "web1",
-        "events": [{"ts": 1751800002000, "kind": "upload", "count": 2}],
-    })
+        "session_id": "web1", "events": [{"kind": "upload", "count": 2}]})
+    assert r.status_code in (404, 405)
+    paths = {getattr(route, "path", "") for route in app.routes}
+    assert not [p for p in paths if "telemetry" in p or "event" in p]
+
+
+def test_front_end_event_calls_do_nothing():
+    defined = 0
+    for js in sorted(STATIC.rglob("*.js")):
+        text = js.read_text(encoding="utf-8")
+        assert "sendBeacon" not in text, js.name
+        assert "/api/telemetry" not in text, js.name
+        defined += len(re.findall(r"function\s+logEvent\b", text))
+    app_js = (STATIC / "app.js").read_text(encoding="utf-8")
+    # the one definition is the empty function
+    assert defined == 1
+    assert re.search(
+        r"function\s+logEvent\s*\(_kind, _details = \{\}\)\s*\{\s*\}", app_js)
+
+
+def test_using_the_app_makes_no_outbound_request(tmp_path, monkeypatch):
+    """Upload, analysis and a row simulation with no course server set."""
+    import httpx
+
+    def explode(*a, **kw):
+        raise AssertionError("the app made an outbound request")
+    for name in ("get", "post", "put", "request", "stream"):
+        monkeypatch.setattr(httpx, name, explode)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+
+    with open(SAMPLE, "rb") as fh:
+        r = client.post("/api/circuit", files=[
+            ("files", ("single_and.dig", fh, "application/xml"))])
     assert r.status_code == 200
-    body = r.json()
-    assert body["ok"] is True and body["stored"] == 1
-    assert sink.recent_events(kind="upload")[0]["session_id"] == "web1"
-
-
-def test_telemetry_endpoint_tolerates_empty_and_junk():
-    r = client.post("/api/telemetry", json={"events": []})
-    assert r.json() == {"ok": True, "stored": 0}
-    r = client.post("/api/telemetry", json={
-        "session_id": None, "events": [{"nope": 1}],
-    })
-    assert r.json()["stored"] == 0
+    sid = r.json()["session_id"]
+    try:
+        assert client.get("/api/config/proxy").json()["configured"] is False
+        assert client.get("/api/machine").status_code == 200
+        sim = client.post("/api/simulate", json={
+            "session_id": sid, "filename": "single_and.dig"})
+        assert sim.status_code == 200
+    finally:
+        server._SESSIONS.pop(sid, None)
+    written = {p.name for p in tmp_path.rglob("*") if p.is_file()}
+    assert written <= {"machine.json", "dlc_config.json",
+                       "official_tests.json"}
 
 
 def test_gc_sessions_removes_idle_sessions_and_their_tmp_dirs(tmp_path):
@@ -141,8 +138,7 @@ def test_upload_runs_the_gc_sweep(tmp_path):
         "tmp_dir": str(d), "files": [],
         "last_used": time.time() - server.SESSION_TTL_SECONDS - 10,
     }
-    path = "data/sample_circuits/tier1_minimal/single_and.dig"
-    with open(path, "rb") as fh:
+    with open(SAMPLE, "rb") as fh:
         r = client.post("/api/circuit",
                         files=[("files", ("single_and.dig", fh, "application/xml"))])
     assert r.status_code == 200

@@ -492,13 +492,20 @@ Mode C (per-spec fallback to Mode B happens automatically).
 | `test_rerun_flags_wrong_added_row_and_keeps_originals_green` | The Mode-B accept-flow's core signal (added-row pass/fail + expected-vs-found) regressed. | `tests/test_l3_oracle.py` |
 | `test_rerun_all_added_pass_sets_mode_b_lock_signal` | `added_all_passed` (Mode B's "you're all set" /daily-lock signal) or temp-file cleanup regressed. | `tests/test_l3_oracle.py` |
 
-#### Telemetry sink + session GC
+#### No usage recording, the course proxy ledger, session GC
 
 | Test | If it fails… | File |
 |---|---|---|
-| `test_log_events_stores_kind_ts_and_details` | The SQLite sink drops or mangles events; the IRB telemetry pairs stop recording. | `tests/test_telemetry_sink.py` |
-| `test_log_events_skips_malformed_entries_without_failing_the_batch` | One bad frontend event can now kill a whole telemetry batch. | `tests/test_telemetry_sink.py` |
-| `test_telemetry_endpoint_stores_batch` | `/api/telemetry` broke; `window.dlcEventLog` flushes go nowhere. | `tests/test_telemetry_sink.py` |
+| `test_log_events_keeps_nothing` | The sink stores usage events again, or writes a file. | `tests/test_telemetry_sink.py` |
+| `test_the_app_has_no_route_that_takes_usage_events` | The app again accepts usage events from the page. | `tests/test_telemetry_sink.py` |
+| `test_front_end_event_calls_do_nothing` | `logEvent` in the page does something again, or a script sends a beacon. | `tests/test_telemetry_sink.py` |
+| `test_using_the_app_makes_no_outbound_request` | Uploading and analysing a circuit contacts a server, or writes more than settings under `~/.dlc`. | `tests/test_telemetry_sink.py` |
+| `test_the_ledger_holds_request_counts_and_nothing_else` | The proxy's database file now holds a prompt or an answer. | `tests/test_telemetry_proxy.py` |
+| `test_the_token_check_notes_the_machine_code_and_nothing_else` | The token check stores more than the machine id, or stops accepting what an earlier app version sends. | `tests/test_telemetry_proxy.py` |
+| `test_anything_else_posted_under_v1_is_checked_and_dropped` | A retired path stores what is posted to it, answers without the course token, or shadows a real route. | `tests/test_telemetry_proxy.py` |
+| `test_a_database_from_an_earlier_version_keeps_working` | A database file from an earlier version breaks the limits, or something else it holds is served by a route. | `tests/test_telemetry_proxy.py` |
+| `test_the_server_answers_only_these_paths` | The proxy gained or lost a route; a new one must not take student data. | `tests/test_telemetry_proxy.py` |
+| `test_export_cells_cannot_act_as_formulas_or_break_rows` | A hand-made request can plant a spreadsheet formula or a broken row in the CSV export. | `tests/test_telemetry_proxy.py` |
 | `test_gc_sessions_removes_idle_sessions_and_their_tmp_dirs` | Idle sessions / upload temp dirs accumulate forever (pre-cohort leak). | `tests/test_telemetry_sink.py` |
 | `test_activity_defers_the_session_ttl` | Active students can lose their session mid-lab to the GC. |`tests/test_telemetry_sink.py` |
 | `test_upload_runs_the_gc_sweep` | The GC no longer rides on uploads; nothing ever gets collected. |`tests/test_telemetry_sink.py` |
