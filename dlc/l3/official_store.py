@@ -59,6 +59,10 @@ def _defaults() -> dict[str, dict]:
             if isinstance(e, dict) and not name.startswith("_")}
 
 
+def editable_defaults() -> list[str]:
+    return sorted(n for n, e in _defaults().items() if e.get("editable"))
+
+
 def _load() -> dict[str, dict]:
     p = store_path()
     if not p.is_file():
@@ -80,12 +84,16 @@ def list_tests() -> list[dict]:
     user = _load()
     merged: dict[str, dict] = {}
     for name, e in _defaults().items():
-        merged[name] = {**e, "_source": "default"}
+        merged[name] = {**e, "_source": "default",
+                        "_editable": bool(e.get("editable"))}
     for name, e in user.items():
+        over = merged.get(name)
         merged[name] = {**e,
-                        "_source": "override" if name in merged else "user"}
+                        "_source": "override" if over else "user",
+                        "_editable": over["_editable"] if over else True}
     return [{"filename": name, "sha1": e.get("sha1", ""),
-             "content": e.get("content", ""), "source": e["_source"]}
+             "content": e.get("content", ""), "source": e["_source"],
+             "editable": e["_editable"]}
             for name, e in sorted(merged.items())]
 
 
@@ -99,7 +107,9 @@ def save_test(filename: str, content: str, *,
         raise ValueError("Filename must be a plain .dig name, e.g. cpu.dig")
     if not (content or "").strip():
         raise ValueError("Testcase content is required.")
-    if name in _defaults() and not allow_default_override:
+    default = _defaults().get(name)
+    if (default is not None and not allow_default_override
+            and not default.get("editable")):
         raise ValueError(
             f"'{name}' is a built-in default and can't be edited by hand — "
             f"run Mode B to all-set and use 'Adopt into official tests' to "
@@ -127,8 +137,18 @@ def get_content(filename: str) -> str | None:
     return content if (content or "").strip() else None
 
 
+def source_of(filename: str) -> str | None:
+    """'default', 'override' (the user's version stands in for a built-in
+    test), 'user', or None when nothing is registered."""
+    if filename in _load():
+        return "override" if filename in _defaults() else "user"
+    return "default" if filename in _defaults() else None
+
+
 def get_runtime_payload(filename: str, key: str) -> str | None:
     import base64
+    if filename in _load():
+        return None
     entry = _defaults().get(filename) or {}
     blob = entry.get("runtime")
     if not blob:

@@ -75,9 +75,33 @@ def test_edited_testcase_earns_one_teal_warning(tmp_path, monkeypatch):
     assert card.kind == KIND
     assert card.severity.value == "warning"
     assert "not the official" in card.title
-    assert "still matches your grade" in card.message
+    assert card.message == ""
     assert "Official tests" in card.suggested_fix
+    assert "rows that run instead" in card.suggested_fix
+    assert "currently only cpu.dig" in card.suggested_fix
+    assert "Coverage coach (Mode B)" in card.suggested_fix
     assert card.component_indices == []
+
+
+def test_the_cards_never_mention_the_grade(tmp_path, monkeypatch):
+    _official(monkeypatch, matching_raw=_OFFICIAL_ROWS)
+    edited = _cards(tmp_path, _xml_circuit(
+        _IO + _testcase(_STUDENT_ROWS), _wire(0, 0, 100, 0)))[0]
+    empty = _cards(tmp_path, _xml_circuit(_IO, _wire(0, 0, 100, 0)))[0]
+    for card in (edited, empty):
+        text = f"{card.title} {card.message} {card.suggested_fix}".lower()
+        assert "grade" not in text
+    assert empty.message.endswith("Test runs use the official test.")
+
+
+def test_the_fix_names_no_file_when_none_is_editable(tmp_path, monkeypatch):
+    from dlc.l3 import official_store
+    _official(monkeypatch, matching_raw=_OFFICIAL_ROWS)
+    monkeypatch.setattr(official_store, "editable_defaults", lambda: [])
+    card = _cards(tmp_path, _xml_circuit(
+        _IO + _testcase(_STUDENT_ROWS), _wire(0, 0, 100, 0)))[0]
+    assert card.suggested_fix.startswith(
+        "Open Settings → Official tests to see the rows that run instead. Or open")
 
 
 def test_file_without_rows_says_so(tmp_path, monkeypatch):

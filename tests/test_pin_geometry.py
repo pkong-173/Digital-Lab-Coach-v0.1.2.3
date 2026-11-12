@@ -99,8 +99,8 @@ def test_decoder_layout():
     pos = absolute_pin_positions(_mk("Decoder", 0, 0, **{"Selector Bits": 5}))
     by_name = {spec.name: (p.x, p.y) for p, spec in pos}
     assert by_name["sel"] == (20, 620)
-    assert by_name["out_0"] == (60, 0)
-    assert by_name["out_31"] == (60, 620)
+    assert by_name["out_0"] == (40, 0)
+    assert by_name["out_31"] == (40, 620)
 
 
 def test_priority_encoder_layout():

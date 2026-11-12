@@ -262,7 +262,7 @@ force or switch off a model per file, add a `subcircuits` block to the lab
 manifest ([MANIFEST_GUIDE.md](MANIFEST_GUIDE.md)); the same block carries
 each subcircuit's one-line `role`. Layer 1's signal flow never uses models.
 
-Two built-in manifests: `data/manifests/cpu.json` for the eight-instruction
+Two built-in manifests: `data/manifests/cpu.json` for the eleven-instruction
 CPU lab subset and `data/manifests/cpu_new.json` for the 37-instruction RV32I
 CPU. For RV32I the Coverage Coach runs the program through a small
 interpreter, follows branches and jumps, and splices extensions in front of
@@ -284,7 +284,7 @@ Restart the app, or the server, after changing any of these.
 | Lecture list Layer 2 cites | `SYLLABUS_311` in `dlc/llm/explain.py` (A.3) |
 | Lab categories, subcircuit roles and formula models, program decode | one manifest per lab in `data/manifests/` ([MANIFEST_GUIDE.md](MANIFEST_GUIDE.md)) |
 | Files Mode A analyzes even when most rows fail | the `no_lazy_gate` list in that lab's manifest; the shipped CPU manifests list the control unit |
-| Official tests | Settings → Official tests (`~/.dlc/official_tests.json`); shipped defaults in `data/official_tests_defaults.json` |
+| Official tests | Settings → Official tests (`~/.dlc/official_tests.json`); shipped defaults in `data/official_tests_defaults.json`. Add `"editable": true` to an entry there to let students rewrite that test by hand (shipped: `cpu.dig`) |
 | The program a lab's instruction ROM must hold | the `runtime` entry in `data/official_tests_defaults.json` ([instructor_rom_config.md](instructor_rom_config.md)) |
 | The formula models themselves | `dlc/sim/models.py`, one function per known subcircuit |
 | Digital.jar location | first-run dialog, Settings, or env `DIGITAL_JAR` |

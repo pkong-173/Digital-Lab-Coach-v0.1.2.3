@@ -37,6 +37,13 @@ def file_test_status(circuit, filename: str) -> str | None:
 INJECTED_TEST_LABEL = "official"
 
 
+def _whose_rows(filename: str) -> str:
+    from dlc.l3 import official_store
+    if official_store.source_of(_plain_name(filename)) == "default":
+        return "Gradescope grades with the official tests"
+    return "your own version from Settings → Official tests"
+
+
 def _replace_testcases(root: ET.Element, content: str) -> bool:
     ves = root.find("visualElements")
     if ves is None:
@@ -205,13 +212,11 @@ def prepare_injected_run(path: str, filename: str) -> tuple[str | None, list[str
                 if status == "missing":
                     notes.append(
                         "official testcase injected (this file has no "
-                        "test rows — Gradescope grades with the official "
-                        "tests)")
+                        f"test rows — {_whose_rows(filename)})")
                 else:
                     notes.append(
                         "official testcase injected in place of this "
-                        "file's modified testcase (Gradescope grades "
-                        "with the official tests)")
+                        f"file's modified testcase ({_whose_rows(filename)})")
 
         if not changed:
             return None, []
@@ -242,9 +247,9 @@ def inject_official_tests_in_place(path: str, filename: str) -> list[str]:
         tree.write(path, encoding="utf-8", xml_declaration=True)
         if status == "missing":
             return ["official testcase injected (this file has no test "
-                    "rows — Gradescope grades with the official tests)"]
+                    f"rows — {_whose_rows(filename)})"]
         return ["official testcase injected in place of the modified "
-                "testcase (Gradescope grades with the official tests)"]
+                f"testcase ({_whose_rows(filename)})"]
     except Exception:
         return []
 

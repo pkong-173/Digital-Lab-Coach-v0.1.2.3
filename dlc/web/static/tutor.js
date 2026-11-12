@@ -33,8 +33,8 @@
     },
     {
       title: "The real grader",
-      html: "This chip shows <b>Digital.jar</b> - the same grader Digital " +
-        "uses, so DLC's verdict always matches your grade. " +
+      html: "This chip shows <b>Digital.jar</b> which is the engine Digital itself " +
+        "uses, so a test passes or fails here exactly as it does in Digital. " +
         "If it says missing, set the path once in Settings.",
       target: "#jar-chip",
       action: { label: "Configure Digital.jar now ▸", run: "jar" },

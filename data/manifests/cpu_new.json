@@ -145,8 +145,8 @@
   "official_tests": {
     "cpu_new.dig": "7a6ce89c08a54b681c5e955378a8a4b70b4ab3b5",
     "controlunit.dig": "9b4046190baed63e2471025dee770abd9a9e7235",
-    "alu.dig": "67fc380408bfda56279dc361a74de034fe3b1e39",
-    "register-file.dig": "9e23eb3263f5675688324ffd07a3f33eb66c171c",
+    "alu.dig": "9ac80e3138ffc3028794cfd2e0a08612534ee3fd",
+    "register-file.dig": "d88b94e2dd2542799504c43f55796aecae9a0b84",
     "add-sub-unit.dig": "35a7905be10b0834244c193f0e0bcc9d72ce3b14",
     "bidirectional-shifter.dig": "232be663c19d6a282fb21a6f31985ed4f1b0c917",
     "boolean-unit.dig": "8ab26519b2066ca6ad4b01bad1fff793f329d298",

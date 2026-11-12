@@ -96,33 +96,39 @@ async function renderOfficialTests() {
   list.classList.remove("muted");
   list.innerHTML = tests.map((t) => {
     const src = t.source || "user";
-    const chip = src === "default"
+    const canEdit = src === "user" || !!t.editable;
+    const editableChip = (src !== "user" && t.editable)
+      ? ` <span class="ot-src ot-src-editable">editable</span>` : "";
+    const chip = (src === "default"
       ? `<span class="ot-src ot-src-default">built-in default</span>`
       : (src === "override"
         ? `<span class="ot-src ot-src-override">overrides a default</span>`
+        : "")) + editableChip;
+    const name = escapeHtml(t.filename);
+    const area = canEdit
+      ? `<textarea class="text-input ot-textarea" data-ot-edit="${name}">${escapeHtml(t.content)}</textarea>`
+      : `<textarea class="text-input ot-textarea" readonly>${escapeHtml(t.content)}</textarea>`;
+    const saveBtn = canEdit
+      ? `<button class="btn-ghost" data-ot-save="${name}">Save changes</button>` : "";
+    const delBtn = src === "user"
+      ? `<button class="btn-ghost ot-delete" data-ot-del="${name}">Delete</button>`
+      : (src === "override"
+        ? `<button class="btn-ghost ot-delete" data-ot-del="${name}">Delete override (revert to default)</button>`
         : "");
-    let editor;
-    if (src === "user") {
-      editor = `<textarea class="text-input ot-textarea" data-ot-edit="${escapeHtml(t.filename)}">${escapeHtml(t.content)}</textarea>
+    const editor = (saveBtn || delBtn)
+      ? `${area}
       <div class="settings-row">
-        <button class="btn-ghost" data-ot-save="${escapeHtml(t.filename)}">Save changes</button>
-        <button class="btn-ghost ot-delete" data-ot-del="${escapeHtml(t.filename)}">Delete</button>
-      </div>`;
-    } else if (src === "override") {
-      editor = `<textarea class="text-input ot-textarea" readonly>${escapeHtml(t.content)}</textarea>
-      <div class="settings-row">
-        <button class="btn-ghost ot-delete" data-ot-del="${escapeHtml(t.filename)}">Delete override (revert to default)</button>
-      </div>`;
-    } else {
-      editor = `<textarea class="text-input ot-textarea" readonly>${escapeHtml(t.content)}</textarea>`;
-    }
+        ${saveBtn}
+        ${delBtn}
+      </div>`
+      : area;
     return `
     <details class="ot-item" data-ot="${escapeHtml(t.filename)}">
       <summary class="ot-bar">
         <span class="ot-name">${escapeHtml(t.filename)}</span>
         <span class="ot-sha">fingerprint ${escapeHtml((t.sha1 || "").slice(0, 10))}</span>
         ${chip}
-        <span class="ot-open muted">${src === "user" ? "view / edit" : "view"}</span>
+        <span class="ot-open muted">${canEdit ? "view / edit" : "view"}</span>
       </summary>
       ${editor}
     </details>`;

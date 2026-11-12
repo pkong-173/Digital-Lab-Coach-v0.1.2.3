@@ -10,6 +10,10 @@ component's <pos x=.. y=..> to get the absolute pin location.
 
 For elements whose pin geometry depends on attributes, we provide a function instead
 of a static list.
+
+Every offset in this file is the position Digital v0.31 itself reports for
+the pin (VisualElement.getPins()), recorded for each element in all four
+rotations and across its geometry attributes.
 """
 
 from dataclasses import dataclass
@@ -26,10 +30,14 @@ class PinSpec:
     direction: str  
     inverted: bool = False
 
-_NOT_PINS = [
-    PinSpec("A", offset_x=0,  offset_y=0, direction="in"),
-    PinSpec("Y", offset_x=40, offset_y=0, direction="out"),
-]
+def _not_pins(comp: Component) -> list[PinSpec]:
+    """Not: A at (0, 0); Y at (40, 0), or (60, 0) with 'wideShape'."""
+    out_x = 60 if comp.attributes.get("wideShape") else 40
+    return [
+        PinSpec("A", offset_x=0, offset_y=0, direction="in"),
+        PinSpec("Y", offset_x=out_x, offset_y=0, direction="out"),
+    ]
+
 
 _INPUT_PINS = [PinSpec("out", 0, 0, "out")]
 _OUTPUT_PINS = [PinSpec("in", 0, 0, "in")]
@@ -101,7 +109,6 @@ _SEVEN_SEG_PINS = [
 ]
 
 STATIC_PIN_TABLE: dict[str, list[PinSpec]] = {
-    "Not":    _NOT_PINS,
     "In":     _INPUT_PINS,
     "Out":    _OUTPUT_PINS,
     "Tunnel": _TUNNEL_PINS,
@@ -122,6 +129,7 @@ STATIC_PIN_TABLE: dict[str, list[PinSpec]] = {
 }
 
 _NARY_GATE_ELEMENTS = frozenset({"And", "Or", "XOr", "NAnd", "NOr", "XNOr"})
+_INVERTED_OUTPUT_GATES = frozenset({"NAnd", "NOr", "XNOr"})
 
 def inverted_input_names(comp: Component) -> list[str]:
     if comp.element_name not in _NARY_GATE_ELEMENTS:
@@ -142,98 +150,45 @@ def _nary_gate_pins(comp: Component) -> list[PinSpec]:
     Boolean gate (And/Or/XOr/NAnd/NOr/XNOr) with N inputs.
 
     Digital attribute 'Inputs' (<int>) controls input count; absent = 2.
-
-    'wideShape' (boolean) selects a taller body. Default treated as False.
-
-    Geometry:
-
-      wideShape=False (compact body): inputs uniform spacing 20.
-      wideShape=True, odd N: inputs uniform spacing 20.
-      wideShape=True, even N: top half + 40-unit middle gap + bottom half,
-        each half internally spaced 20.
-        Examples: N=2 -> +0, +40
-                  N=4 -> +0, +20, +60, +80
-                  N=6 -> +0, +20, +40, +80, +100, +120
-
-    Output sits at x=80, y centered between the topmost and bottommost
-    input. NAnd/NOr/XNOr add a bubble that  pushes the visible output 20
-    further right, absorbed by the endpoint-snap tolerance in build_netlist.
     """
     n = int(comp.attributes.get("Inputs", 2))
     wide = bool(comp.attributes.get("wideShape", False))
     inverted_idxs = {int(nm[2:]) for nm in inverted_input_names(comp)}
+    half = n // 2
+    gap = 20 if n % 2 == 0 else 0
     pins: list[PinSpec] = []
-
-    def _input_x(i: int) -> int:
-        return -20 if i in inverted_idxs else 0
-
-    if wide and n >= 2 and n % 2 == 0:
-        half = n // 2
-        for i in range(half):
-            pins.append(
-                PinSpec(f"in{i}", offset_x=_input_x(i), offset_y=i * 20,
-                        direction="in", inverted=(i in inverted_idxs))
-            )
-        bottom_start = (half - 1) * 20 + 40
-        for i in range(half):
-            idx = half + i
-            pins.append(
-                PinSpec(
-                    f"in{idx}",
-                    offset_x=_input_x(idx),
-                    offset_y=bottom_start + i * 20,
-                    direction="in",
-                    inverted=(idx in inverted_idxs),
-                )
-            )
-        center_y = ((half - 1) * 20 + bottom_start) // 2
-
-    else:
-        for i in range(n):
-            pins.append(
-                PinSpec(f"in{i}", offset_x=_input_x(i), offset_y=i * 20,
-                        direction="in", inverted=(i in inverted_idxs))
-            )
-        center_y = ((n - 1) * 20) // 2
-    pins.append(PinSpec("Y", offset_x=80, offset_y=center_y, direction="out"))
-
+    for i in range(n):
+        pins.append(PinSpec(
+            f"in{i}",
+            offset_x=-20 if i in inverted_idxs else 0,
+            offset_y=i * 20 + (gap if i >= half else 0),
+            direction="in",
+            inverted=(i in inverted_idxs),
+        ))
+    out_x = (80 if wide else 60) + (20 if comp.element_name in _INVERTED_OUTPUT_GATES else 0)
+    pins.append(PinSpec("Y", offset_x=out_x, offset_y=half * 20, direction="out"))
     return pins
 
 
 def _multiplexer_pins(comp: Component) -> list[PinSpec]:
     """
-    Multiplexer. 'Selector Bits' = N → 2^N data inputs (absent = 1 → 2-to-1).
-    2-input Mux uses spacing 40 with sel at (20, 40), 4+ input uses spacing 20.
+    Multiplexer. 'Selector Bits' = N -> 2^N data inputs (absent = 1 -> 2-to-1).
 
-      n_inputs == 2 (sel_bits=1):
-        in_i at (0, i * 40)   
-        sel  at (20, 40)
-        out  at (40, 20)
+      2 inputs:   in0 (0, 0), in1 (0, 40), out (40, 20), sel (20, 40)
+      4+ inputs:  in_i (0, i * 20), out (40, n * 10), sel (20, n * 20)
 
-      n_inputs >= 4 (sel_bits >= 2):
-        in_i at (0, i * 20)
-        sel  at (20, n_inputs * 20)
-        out  at (40, n_inputs * 10)
-
-    'flipSelPos' (Digital's flip-selector attribute) moves sel to the top
-    edge at (20, -20) for either size.
+    'flipSelPos' moves sel to the top edge, at (20, 0) for every size.
     """
     sel_bits = int(comp.attributes.get("Selector Bits", 1))
     n_inputs = 2 ** sel_bits
-    if n_inputs == 2:
-        spacing, sel_y, out_y = 40, 40, 20
-    else:
-        spacing = 20
-        sel_y = n_inputs * 20
-        out_y = n_inputs * 10
-    if comp.attributes.get("flipSelPos"):
-        sel_y = -20
+    spacing = 40 if n_inputs == 2 else 20
+    sel_y = 0 if comp.attributes.get("flipSelPos") else n_inputs * 20
 
     pins: list[PinSpec] = []
     for i in range(n_inputs):
         pins.append(PinSpec(f"in{i}", offset_x=0, offset_y=i * spacing, direction="in"))
     pins.append(PinSpec("sel", offset_x=20, offset_y=sel_y, direction="in"))
-    pins.append(PinSpec("out", offset_x=40, offset_y=out_y, direction="out"))
+    pins.append(PinSpec("out", offset_x=40, offset_y=(n_inputs // 2) * 20, direction="out"))
     return pins
 
 
@@ -288,52 +243,40 @@ def _register_pins(comp: Component) -> list[PinSpec]:
 
 def _decoder_pins(comp: Component) -> list[PinSpec]:
     """
-    Decoder: 2^Selector Bits outputs stacked on the right edge, one sel
-    input on the bottom edge. Unlike the Multiplexer (sel one grid row
-    BELOW the last input, y = n*20), the Decoder's sel sits at the height
-    of the LAST output: y = (n-1)*20 — measured against a rotation-2
-    Selector-Bits-5 Decoder in a real lab file whose sel feed lands
-    exactly there (a one-row-off table made every such circuit flag a
-    false "undriven sel"). Example (Selector Bits=5, 32 outputs):
-      out_i at (60, i * 20)
-      sel   at (20, 620)          # (n_outputs - 1) * 20
-    'flipSelPos' (Digital's flip-selector attribute) moves sel to the top
-    edge at (20, -20).
+    Decoder: 2^Selector Bits outputs on the right edge at x = 40, one sel
+    input on the bottom edge.
     """
     sel_bits = int(comp.attributes.get("Selector Bits", 1))
     n_outputs = 2 ** sel_bits
-    sel_y = -20 if comp.attributes.get("flipSelPos") else (n_outputs - 1) * 20
+    spacing = 40 if n_outputs == 2 else 20
+    if comp.attributes.get("flipSelPos"):
+        sel_y = 0
+    else:
+        sel_y = n_outputs * 20 if n_outputs <= 2 else (n_outputs - 1) * 20
     pins: list[PinSpec] = [
         PinSpec("sel", offset_x=20, offset_y=sel_y, direction="in"),
     ]
     for i in range(n_outputs):
-        pins.append(PinSpec(f"out_{i}", offset_x=60, offset_y=i * 20, direction="out"))
+        pins.append(PinSpec(f"out_{i}", offset_x=40, offset_y=i * spacing, direction="out"))
     return pins
 
 
 def _demultiplexer_pins(comp: Component) -> list[PinSpec]:
     """
     Demultiplexer: routes one data input to 1 of 2^Selector Bits outputs.
-    Mirror of the Multiplexer layout — measured against a Selector-Bits-5
-    Demultiplexer in a real lab register file (write-enable fan-out):
-      n_outputs >= 4:
-        out_i at (40, i * 20)
-        in    at (0, n_outputs * 10)     (left edge, middle)
-        sel   at (20, n_outputs * 20)    (bottom, same rule as Mux)
-      n_outputs == 2 (sel_bits=1): spacing 40, like the 2-input Mux:
-        out0 (40, 0), out1 (40, 40), in (0, 20), sel (20, 40)
-    'flipSelPos' moves sel to the top edge at (20, -20).
+    The mirror image of the Multiplexer:
+
+      2 outputs:   out_0 (40, 0), out_1 (40, 40), in (0, 20), sel (20, 40)
+      4+ outputs:  out_i (40, i * 20), in (0, n * 10), sel (20, n * 20)
+
+    'flipSelPos' moves sel to the top edge, at (20, 0).
     """
     sel_bits = int(comp.attributes.get("Selector Bits", 1))
     n_outputs = 2 ** sel_bits
-    if n_outputs == 2:
-        spacing, in_y, sel_y = 40, 20, 40
-    else:
-        spacing, in_y, sel_y = 20, n_outputs * 10, n_outputs * 20
-    if comp.attributes.get("flipSelPos"):
-        sel_y = -20
+    spacing = 40 if n_outputs == 2 else 20
+    sel_y = 0 if comp.attributes.get("flipSelPos") else n_outputs * 20
     pins: list[PinSpec] = [
-        PinSpec("in", offset_x=0, offset_y=in_y, direction="in"),
+        PinSpec("in", offset_x=0, offset_y=(n_outputs // 2) * 20, direction="in"),
         PinSpec("sel", offset_x=20, offset_y=sel_y, direction="in"),
     ]
     for i in range(n_outputs):
@@ -382,6 +325,7 @@ def _comparator_pins(comp: Component) -> list[PinSpec]:
     ]
 
 DYNAMIC_PIN_TABLE: dict[str, callable] = {
+    "Not":  _not_pins,
     "And":  _nary_gate_pins,
     "Or":   _nary_gate_pins,
     "XOr":  _nary_gate_pins,

@@ -3,8 +3,6 @@
 One rule, for every lab file that contains a ROM: register the ROM's
 official contents next to the file's official tests, and the tool treats
 them as one more test. A student's ROM must hold exactly those words.
-The instruction memory of `cpu.dig`, the decode table of
-`control-unit.dig`, any ROM in any lab: same rule, no exceptions.
 
 ---
 
@@ -24,6 +22,11 @@ every ROM in the file must hold the registered words.
 
 A file with official tests but no registered ROM contents is not
 checked; Mode A then treats its ROM like any other component.
+
+The registered contents go with the built-in test. Once a student's own
+version of that test is in force (rewritten in Settings where the default
+is marked editable, or adopted from Mode B), the file's ROM is no longer
+checked: their rows may describe another program.
 
 ## 2. Where the configuration lives
 

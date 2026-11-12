@@ -38,7 +38,7 @@ def test_decoder_sel_sits_at_last_output_height():
 def test_decoder_flip_sel_pos_moves_sel_to_top():
     d = _c("Decoder", **{"Selector Bits": 5, "flipSelPos": True})
     sel = _pin(get_pin_specs(d), "sel")
-    assert (sel.offset_x, sel.offset_y) == (20, -20)
+    assert (sel.offset_x, sel.offset_y) == (20, 0)
 
 
 def test_demux_pin_layout_matches_measured_lab_geometry():
@@ -62,7 +62,7 @@ def test_mux_and_demux_flip_sel_pos_moves_sel_to_top():
     for name in ("Multiplexer", "Demultiplexer"):
         d = _c(name, **{"Selector Bits": 2, "flipSelPos": True})
         sel = _pin(get_pin_specs(d), "sel")
-        assert (sel.offset_x, sel.offset_y) == (20, -20), name
+        assert (sel.offset_x, sel.offset_y) == (20, 0), name
 
 
 def test_demux_routes_input_and_zeroes_the_rest():

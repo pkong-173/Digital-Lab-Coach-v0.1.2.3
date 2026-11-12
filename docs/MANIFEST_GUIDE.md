@@ -114,7 +114,8 @@ Shipped formulas:
 |---|---|---|
 | `rv32i_alu` | A, B, ALUOp → Result, FlagZ | AND, OR, ADD, XOR, SLL, SRL, SUB, SLT, SRA, SLTU (shifts A by B) |
 | `lab5_alu` | A, B, ALUOp → Result, FlagZ | the original Lab 5 ALU: same codes without SLTU, shifts B by A |
-| `lab5_control` | opcode, funct3, funct7 → the eight Lab 5 signals | Lab 5 decode table |
+| `lab5_control` | opcode, funct3, funct7 → RegWrite, ALUSrc, ImmSrc (2 bits), ALUOp (4 bits) | Fall 2026 Lab 5 decode table: eleven instructions (add, sub, and, or, slt, addi, slti, andi, sll, srl, sra); anything else leaves RegWrite at 0 and ALUOp at ADD |
+| `lab5_control_bits` | opcode, funct3, funct7 → the same signals, one output per bit (ImmSrc1, ImmSrc0, ALUOp3…ALUOp0) | the earlier Lab 5 pins, eight instructions; picked automatically when a file still has them |
 | `rv32i_control` | opcode, funct3, funct7 → up to 17 signals | all 37 RV32I instructions; unknown word = NOP |
 | `rv32i_register_file` | ReadReg1, ReadReg2, WriteReg, WriteData, RegWrite, Clock → ReadData1, ReadData2 | 32 registers, x0 stays 0 |
 | `add_sub` | A, B, Sub → Out, Overflow, Sign | add / subtract with flags |
@@ -176,7 +177,7 @@ copy the block as is:
 - `categories_from` — the file whose `categories` list names the
   instructions the lab implements (usually the control unit, with
   categories over `opcode` / `funct3` / `funct7`). `cpu.json` lists the
-  eight Lab 5 instructions, `cpu_new.json` all 37 of RV32I.
+  eleven Lab 5 instructions, `cpu_new.json` all 37 of RV32I.
 - `observe` — the CPU testcase's columns for the two register-file read
   ports and, if the program parks in a `jal x0, 0` halt loop, the program
   counter. With them the coach reads back every value an extension writes
@@ -204,6 +205,11 @@ choice applies and the course key pays.
 - Built-in defaults are view-only. They change only through *Adopt into
   official tests* after a Coverage Coach run ends **all set**; an adopted
   override can be deleted to return to the default.
+- A default marked `"editable": true` in `data/official_tests_defaults.json`
+  is the exception. Students may rewrite its rows in Settings; test runs 
+  then use their version, and *Delete override* brings the built-in rows back.
+  While an override is in force the registered ROM contents of that file are
+  not checked, because the student's rows may describe another program.
 - Anyone may add official tests for their own labs (filename + testcase
   content, validated as Digital test format); those entries stay editable.
 - Manifests are files in the fork: giving a new lab its meaning is the

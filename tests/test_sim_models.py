@@ -41,9 +41,90 @@ def test_control_tables():
     assert (beq["ImmSrc2"], beq["ImmSrc1"], beq["ImmSrc0"]) == (0, 1, 0)
     unknown = _ev("rv32i_control", opcode=0b1111111, funct3=0, funct7=0)
     assert not any(unknown.values())
-    lab5_unknown = _ev("lab5_control", opcode=0b1111111, funct3=0, funct7=0)
-    assert lab5_unknown["RegWrite"] == 1 and lab5_unknown["ALUOp1"] == 1
-    assert "Branch" not in lab5_unknown
+    old_unknown = _ev("lab5_control_bits", opcode=0b1111111, funct3=0, funct7=0)
+    assert old_unknown["RegWrite"] == 1 and old_unknown["ALUOp1"] == 1
+    assert "Branch" not in old_unknown
+
+_LAB5_CONTROL_ROWS = """
+51 0 0 1 0 0 2
+51 0 32 1 0 0 6
+51 7 0 1 0 0 0
+51 6 0 1 0 0 1
+51 2 0 1 0 0 7
+19 0 0 1 1 0 2
+19 0 32 1 1 0 2
+19 0 63 1 1 0 2
+19 0 64 1 1 0 2
+19 0 127 1 1 0 2
+19 2 0 1 1 0 7
+19 2 32 1 1 0 7
+19 2 63 1 1 0 7
+19 2 64 1 1 0 7
+19 2 127 1 1 0 7
+19 7 0 1 1 0 0
+19 7 32 1 1 0 0
+19 7 63 1 1 0 0
+19 7 64 1 1 0 0
+19 7 127 1 1 0 0
+51 1 0 1 0 0 4
+51 5 0 1 0 0 5
+51 5 32 1 0 0 8
+0 0 0 0 0 0 2
+51 0 1 0 0 0 2
+51 4 0 0 0 0 2
+19 5 32 0 0 0 2
+"""
+
+
+def test_lab5_control_follows_the_fall_2026_test_row_by_row():
+    rows = [[int(v) for v in ln.split()] for ln in _LAB5_CONTROL_ROWS.split("\n") if ln.strip()]
+    assert len(rows) == 27
+    for opcode, f3, f7, rw, src, imm, alu in rows:
+        got = _ev("lab5_control", opcode=opcode, funct3=f3, funct7=f7)
+        assert got == {"RegWrite": rw, "ALUSrc": src, "ImmSrc": imm, "ALUOp": alu}, (opcode, f3, f7)
+
+
+def test_shipped_control_unit_test_is_the_fall_2026_one():
+    import json
+    from pathlib import Path
+    from dlc.l3 import manifest as mf
+    entry = json.loads(Path("data/official_tests_defaults.json")
+                       .read_text(encoding="utf-8"))["control-unit.dig"]
+    lines = [ln for ln in entry["content"].split("\n") if ln.strip()]
+    assert lines[0].split() == ["opcode", "funct3", "funct7", "RegWrite",
+                                "ALUSrc", "ImmSrc", "ALUOp"]
+    assert [ln.split() for ln in lines[1:]] == [
+        ln.split() for ln in _LAB5_CONTROL_ROWS.split("\n") if ln.strip()]
+    assert "runtime" not in entry
+    lab5 = json.loads(Path("data/manifests/cpu.json").read_text(encoding="utf-8"))
+    assert mf.normalized_test_hash(entry["content"]) == entry["sha1"] \
+        == lab5["official_tests"]["control-unit.dig"]
+
+
+def _control_child(tmp_path, outputs):
+    """A control-unit file with the given output pins and no logic."""
+    def ve(name, attrs, x, y):
+        a = "".join(f"<entry><string>{k}</string><{t}>{v}</{t}></entry>" for k, t, v in attrs)
+        return (f"<visualElement><elementName>{name}</elementName><elementAttributes>{a}"
+                f'</elementAttributes><pos x="{x}" y="{y}"/></visualElement>')
+    els = "".join(ve("In", [("Label", "string", n), ("Bits", "int", b)], 0, 40 * i)
+                  for i, (n, b) in enumerate((("opcode", 7), ("funct3", 3), ("funct7", 7))))
+    els += "".join(ve("Out", [("Label", "string", n), ("Bits", "int", b)], 400, 40 * i)
+                   for i, (n, b) in enumerate(outputs))
+    p = tmp_path / "control-unit.dig"
+    p.write_text('<?xml version="1.0" encoding="utf-8"?>\n<circuit><version>2</version><attributes/>'
+                 f"<visualElements>{els}</visualElements><wires/></circuit>\n", encoding="utf-8")
+    from dlc.parser.dig_parser import parse_dig_file
+    return parse_dig_file(str(p))
+
+
+def test_both_control_unit_pin_sets_find_their_model(tmp_path):
+    from dlc.sim import models
+    buses = _control_child(tmp_path, (("RegWrite", 1), ("ALUSrc", 1), ("ImmSrc", 2), ("ALUOp", 4)))
+    assert [m.name for m in models.candidates(buses)] == ["lab5_control"]
+    bits = _control_child(tmp_path, tuple((n, 1) for n in (
+        "RegWrite", "ALUSrc", "ImmSrc1", "ImmSrc0", "ALUOp3", "ALUOp2", "ALUOp1", "ALUOp0")))
+    assert [m.name for m in models.candidates(bits)][0] == "lab5_control_bits"
 
 
 def test_immediates_of_one_instruction_word():

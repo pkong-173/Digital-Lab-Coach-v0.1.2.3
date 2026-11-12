@@ -50,17 +50,19 @@ Last updated: 2026/9/6
 
 Elements in scope but with no encountered samples yet: `RAM`, `D-FlipFlop`, `JK-FF`, `T-FF`, `Counter`, `Driver` (tri-state), `Display`, `LED`, `Switch`, `Button`.
 
-### Pin geometry (offsets from anchor, verified empirically)
+### Pin geometry (offsets from anchor, as Digital v0.31 reports them)
 
 Digital's coordinate system: x increases rightward, y increases downward. Anchor is the `<pos>` of the visual element. Pin coords = anchor + offset, with rotation applied to the offset before adding the anchor.
 
+Every offset below is what Digital itself returns from `VisualElement.getPins()`. `scripts/digital_oracle/oracle.py record` asks the installed Digital.jar for each element in all four rotations and across its geometry attributes (about 3,700 variants) and writes `tests/fixtures/digital_v0_31_pins.json`; `tests/test_pin_geometry_truth.py` replays that file against `pin_geometry.py`.
+
 | Element | Inputs (left edge) | Outputs (right edge) | Notes |
 |---|---|---|---|
-| `Not` | `A` (0, 0) | `Y` (40, 0) | Width 40 |
-| `And`/`Or`/`XOr` (wideShape=True, even N) | Two halves with **40-unit gap** in the middle | `Y` (80, center_y) | Verified empirically. N=2 → (0,0),(0,40); N=4 → (0,0),(0,20),(0,60),(0,80); N=6 → (0,0),(0,20),(0,40),(0,80),(0,100),(0,120) |
-| `And`/`Or`/`XOr` (wideShape=True, odd N) | `in_i` at (0, i*20) — uniform | `Y` (80, center_y) | Tested via three_inputand, five_inputand (tests pass with full I→O); offsets match wire endpoints exactly |
-| `And`/`Or`/`XOr` (wideShape=False) | Assumed `in_i` at (0, i*20) | Assumed `Y` (80, center_y) | **Not yet observed in any sample.** Code uses the same uniform-20 path as wideShape+odd. Will verify when we encounter one in the field |
-| `NAnd`/`NOr`/`XNOr` (any) | same as positive variants | Output bubble pushes visible pin ~20 right; absorbed by snap tolerance | Only wideShape=True observed (single_nand) |
+| `Not` | `A` (0, 0) | `Y` (40, 0); (60, 0) with `wideShape` | |
+| `And`/`Or`/`XOr` (even N) | Two halves with a **40-unit gap** in the middle, with or without `wideShape`: N=2 → (0,0),(0,40); N=4 → (0,0),(0,20),(0,60),(0,80); N=6 → (0,0),(0,20),(0,40),(0,80),(0,100),(0,120) | `Y` (60, (N/2)·20); x = 80 with `wideShape` | Until r119 the table assumed uniform 20 spacing and `Y` at x = 80 for the plain shape. Loose snapping hid it for unrotated gates; a 2-input gate turned 90° was flagged "undriven" |
+| `And`/`Or`/`XOr` (odd N) | `in_i` at (0, i*20), uniform | `Y` (60, ((N−1)/2)·20); x = 80 with `wideShape` | |
+| any gate input named in `inverterConfig` | starts one step left, at x = −20 | | the bubble |
+| `NAnd`/`NOr`/`XNOr` | same as the positive gates | `Y` one step further right for the bubble: x = 80, or 100 with `wideShape` | |
 | `In`/`Out`/`Const`/`Clock`/`Ground`/`VDD` | single pin at anchor (0, 0) | | |
 | `Tunnel` | single bidir pin at anchor | | NetName unifies across the circuit |
 | `Multiplexer` (sel_bits=1, n=2) | `in0` (0, 0), `in1` (0, 40), `sel` (20, 40) | `out` (40, 20) | **Different spacing for 2-input vs 4+** |
@@ -69,18 +71,18 @@ Digital's coordinate system: x increases rightward, y increases downward. Anchor
 | `Register` | `D` (0, 0), `C` (0, 20), `en` (0, 40) | `Q` (60, 20) | `en` always present even when tied to Const(1) |
 | `Comparator` | `A` (0, 0), `B` (0, 20) | `gr` (60, 0), `eq` (60, 20), `le` (60, 40) | Width **60**, not 80 — common mistake |
 | `Add` | `a` (0, 0), `b` (0, 20), `c_i` (0, 40) | `s` (60, 0), `c_o` (60, 20) | Width **60**. Input order top-to-bottom matches Digital's UI: a, b, c_i. c_o at y=20 not y=40 — earlier-assumed (80, 40) layout consistently snapped to wire L-bends and produced phantom multi-drivers. |
-| `BitExtender` | `in` (0, 0) | `out` (80, 0) | Width varies with outputBits; snap tolerance absorbs ±20 |
+| `BitExtender` | `in` (0, 0) | `out` (60, 0) | |
 | `BarrelShifter` | `in` (0, 0), `sh` (0, 40) | `out` (60, 20) | |
 | `Seven-Seg` | `a/b/c/d` at `(0,0)/(20,0)/(40,0)/(60,0)`; `e/f/g/dp` at `(0,140)/(20,140)/(40,140)/(60,140)` | (no outputs — display sink only) | **Corrected r34** via SVG export of a real Lab-2 file: pins sit ON the anchor row and at +140, `dp` on the SAME row as e/f/g. The old −40/180/240 offsets only ever matched because students park tunnels exactly one wire-length past the pins. |
 | `ROM` | `A` (0, 0), `sel` (0, 40) | `D` (60, 20) | Box is 60 wide (SVG-verified, r30) — the old (80, 20) survived only via loose endpoint snapping |
 | `RegisterFile` | `Din` (0,0), `we` (0,20), `Rw` (0,40), `C` (0,60), `Ra` (0,80), `Rb` (0,100) | `Da` (80,0), `Db` (80,20) | Built-in register bank (Memory category); width **80**; reads combinational, write clocked; measured on a real student CPU (r28, re-landed r31) |
-| `Decoder` | `sel` (20, (n_outputs − 1) * 20) | `out_i` at (60, i*20) | **sel sits at the LAST output's height, NOT one row below like the Mux** — measured on a rotation-2 sel_bits=5 Decoder whose sel feed lands exactly at (20, 620); the old n*20 table falsely flagged its sel undriven |
+| `Decoder` | `sel` (20, (n_outputs − 1) * 20); with 2 outputs (20, 40) | `out_i` at (40, i*20); with 2 outputs (40, 0) and (40, 40) | **sel sits at the LAST output's height, NOT one row below like the Mux**: a sel_bits=5 Decoder has sel at (20, 620). Outputs are at x = 40, not 60 |
 | `Demultiplexer` (sel_bits=1, n=2) | `in` (0, 20), `sel` (20, 40) | `out0` (40, 0), `out1` (40, 40) | mirror of the 2-input Mux |
 | `Demultiplexer` (sel_bits≥2, n≥4) | `in` (0, n*10), `sel` (20, n*20) | `out_i` at (40, i*20) | measured on a sel_bits=5 register-file write-enable fan-out; non-selected outputs drive 0 |
 | `PriorityEncoder` | `in_i` at (0, i*20) | `num` (80, 0), `f` (80, 20) | `f` = 1-bit "any input set" flag; students wire it as ROM chip select (r30) |
 
 `flipSelPos` (Multiplexer / Demultiplexer / Decoder): Digital's "flip selector position"
-attribute moves the `sel` pin to the TOP edge at (20, −20); everything else is unchanged.
+attribute moves the `sel` pin to the TOP edge at (20, 0); everything else is unchanged.
 
 ### Rotation
 
@@ -88,12 +90,13 @@ attribute moves the `sel` pin to the TOP edge at (20, −20); everything else is
 - In screen coordinates (y growing down), CCW visual = math CW.
 - Formula: `(dx, dy)` → `(dy, -dx)` for N=1, `(-dx, -dy)` for N=2, `(-dy, dx)` for N=3.
 - Verified empirically against a rotated Multiplexer (rotation=1, sel_bits=1) in `register-file.dig` and a rotated Splitter (rotation=2) in `cpu.dig`.
+- A sub-circuit instance turns the same way: its box pins are rotated before the anchor is added.
 
 ### Gates
 
 - Gate multi-input attribute is `Inputs` (`<int>`), absent = 2.
 - Gate anchor = TOP input pin, not center.
-- For `wideShape=True` with even `N≥4`, the input column has a 40-unit gap in the middle (so the output sits centered between the halves).
+- With an even number of inputs the input column has a 40-unit gap in the middle (so the output sits centered between the halves); `wideShape` only moves the output from x = 60 to x = 80.
 - **Negated inputs (`inverterConfig`)**: a gate may carry `<inverterConfig>`
   listing input pin names (`In_1`, `In_2`, …) that are inverted (a bubble on
   that specific input). It changes the gate's logic and its visual state — e.g.
@@ -134,6 +137,9 @@ The net builder uses two-stage pin attachment:
 1. **Predicted-pin snap** (for known-geometry elements): for each (pin, endpoint) pair within `PIN_SNAP_TOLERANCE` (Manhattan distance ≤ 30), build all triples sorted by distance. Walk in sorted order and claim each pair only if neither side already claimed. Multiple pins at the *exact same coord* (distance 0) can share an endpoint.
 2. **Implicit-pin attach** (for no-geometry components, mostly subcircuit references): unclaimed degree-1 endpoints get assigned to the nearest no-geometry component within `IMPLICIT_PIN_RADIUS` (= 500). Per-instance cap = `child.inputs() + child.outputs()`; if more endpoints claim the instance than the cap allows, the farthest are dropped.
 3. **Co-located output rescue**: if a predicted output-direction pin doesn't snap to a wire endpoint but its exact coord is already part of a known net (most commonly because a Tunnel was placed directly on the pin with no connecting wire), the pin joins that net as a driver. This is how students wire Clock-through-tunnel in pipelined circuits, and applies to any output pin not just Clock.
+
+4. **The snap turns with the component.** An input pin may take an endpoint that is at most one grid step away along its own pin row and exactly on it across: for an unrotated component that is an exact x and |dy| ≤ 20, for one turned by 90° or 270° it is an exact y and |dx| ≤ 20. With the offsets exact the snap is a safety net only; on the 88 sample circuits no pin needs it.
+5. **A tunnel on a pin belongs to that pin.** Digital joins a tunnel placed straight on a pin without a wire. No other, unwired output may claim that tunnel for being one grid step away.
 
 Dangling **outputs** are dropped from the netlist (they're not errors — just unused). Dangling **inputs** are kept as singleton nets so F5 can detect them as bugs.
 
@@ -250,6 +256,8 @@ verified empirically:
 - **Subcircuit instance pin direction resolution** (unresolved children only): the instance has no native geometry, so direction is inferred by splitting the instance's implicit pins at the x-midpoint (left = inputs, right = outputs), sorting each side by y, and zipping against the child circuit's `In`/`Out` elements sorted by y. Implicit-pin count is capped to the child's port count to prevent over-claim from neighboring routing.
 
 ## L1 regression ground truths
+
+- **Ask Digital, not the canvas.** A Layer 1 finding that names a pin as undriven or dangling on a circuit that passes in Digital is almost always a pin offset. Run `uv run python scripts/digital_oracle/oracle.py check <file or folder>`. It prints every pin DLC places or connects unlike Digital (MISSED, PHANTOM, DIR, NETS), for a whole submission folder at once.
 
 - **PriorityEncoder has TWO outputs**: `num` at (80, 0) and `f` — the
   1-bit "any input set" flag — at (80, 20). Students wire `f` as the

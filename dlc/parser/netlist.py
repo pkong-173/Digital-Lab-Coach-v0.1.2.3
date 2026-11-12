@@ -29,7 +29,7 @@ Endpoint-primary design:
 from dataclasses import dataclass, field
 
 from dlc.parser.models import Circuit, Component, Wire
-from dlc.parser.pin_geometry import absolute_pin_positions
+from dlc.parser.pin_geometry import _rotate, absolute_pin_positions
 
 
 PIN_SNAP_TOLERANCE = 30 # Large enough to cover wide subcircuit instances
@@ -217,6 +217,11 @@ def _subcircuit_pin_specs(child) -> list:
         ))
     return pins
 
+def _component_rotation(comp: Component) -> int:
+    rotation = comp.attributes.get("rotation", 0)
+    return rotation if isinstance(rotation, int) else 0
+
+
 def _all_predicted_pins(circuit: Circuit) -> list:
     # Every RESOLVED child gets declared-pin predictions: pins follow the
     # child's In/Out file order, and the box width falls back to Digital's
@@ -231,10 +236,12 @@ def _all_predicted_pins(circuit: Circuit) -> list:
     for c_idx, comp in enumerate(circuit.components):
         if comp.element_name.endswith(".dig") and id(comp) in sub_predicted:
             child = sub_predicted[id(comp)]
+            rotation = _component_rotation(comp)
             for spec in _subcircuit_pin_specs(child):
+                dx, dy = _rotate(spec.offset_x, spec.offset_y, rotation)
                 out.append((
                     c_idx,
-                    (comp.position.x + spec.offset_x, comp.position.y + spec.offset_y),
+                    (comp.position.x + dx, comp.position.y + dy),
                     spec,
                 ))
         else:
@@ -248,6 +255,7 @@ def _assign_endpoints_to_pins(
     endpoints: set,
     tolerance: int,
     endpoint_degree: dict | None = None,
+    sideways: set | None = None,
 ) -> dict:
 
     """
@@ -258,7 +266,13 @@ def _assign_endpoints_to_pins(
 
      Direction-aware tolerance:
 
-    - INPUT (and bidir) pins: require **exact x-match** (gap_x = 0).
+    - INPUT (and bidir) pins: no gap across the pin row, at most one grid
+      step along it. Inputs are stacked along the component's own y axis,
+      so for an unrotated component that means an exact x and |dy| <= 20.
+      A component turned by 90 or 270 degrees (`sideways`, by component
+      index) has its inputs side by side, and the roles of x and y swap.
+      Judging such a gate in screen axes left its second input "undriven"
+      when the offset table was one row off.
 
     - OUTPUT pins: keep the loose Manhattan tolerance, but a
       nonzero-distance claim may only take a degree-1 endpoint (a wire
@@ -268,6 +282,7 @@ def _assign_endpoints_to_pins(
       multi-driver errors (seen on real comparator ladders where an
       unused `gr`/`le` sat 20 px from an `eq` wire corner).
     """
+    turned = sideways or set()
     triples = []
     for ep in endpoints:
         for c_idx, (px, py), spec in predicted:
@@ -275,7 +290,8 @@ def _assign_endpoints_to_pins(
             dy = abs(py - ep[1])
             d = dx + dy
             if spec.direction in ("in", "bidir", "weak"):
-                if dx > 0 or dy > 20:
+                across, along = (dy, dx) if c_idx in turned else (dx, dy)
+                if across > 0 or along > 20:
                     continue
             else:
                 if d > tolerance:
@@ -381,6 +397,8 @@ def _attach_pins_endpoint_first(
     pin_to_coord = _assign_endpoints_to_pins(
         predicted, endpoints, PIN_SNAP_TOLERANCE,
         endpoint_degree=_wire_endpoint_degree(circuit),
+        sideways={i for i, comp in enumerate(circuit.components)
+                  if _component_rotation(comp) % 2 == 1},
     )
     snapped_endpoints: set = set(pin_to_coord.values())
     exact_match_targets: set = set()
@@ -395,7 +413,11 @@ def _attach_pins_endpoint_first(
         else:
             fallback_outs.append((c_idx, spec.name, px, py))
 
-    excluded_targets = snapped_endpoints | exact_match_targets
+    on_a_pin = {
+        (px, py) for c_idx, (px, py), _spec in predicted
+        if circuit.components[c_idx].element_name != "Tunnel"
+    }
+    excluded_targets = snapped_endpoints | exact_match_targets | on_a_pin
     pin_to_tunnel = _assign_out_pins_to_tunnels(
         fallback_outs, tunnel_coords, excluded_targets, PIN_SNAP_TOLERANCE
     )

@@ -2,8 +2,23 @@ from dlc.analyzer.wire_completeness import Issue, IssueSeverity
 
 KIND = "official_test_mismatch"
 
-_FIX_MODIFIED = "Open Settings → Official tests to see the rows that count."
 _FIX_MISSING = "Open Settings → Official tests to see the rows that will run."
+_FIX_COACH = ("Or open Layer 3 → Coverage coach (Mode B), generate new "
+              "tests and run again.")
+
+
+def _fix_modified() -> str:
+    try:
+        from dlc.l3 import official_store
+        names = official_store.editable_defaults()
+    except Exception:
+        names = []
+    if names:
+        return ("Open Settings → Official tests to see the rows that run "
+                "instead, or rewrite them there where that is allowed "
+                f"(currently only {', '.join(names)}). {_FIX_COACH}")
+    return ("Open Settings → Official tests to see the rows that run "
+            f"instead. {_FIX_COACH}")
 
 
 def check_official_test_match(circuit, filename: str) -> list[Issue]:
@@ -19,17 +34,12 @@ def check_official_test_match(circuit, filename: str) -> list[Issue]:
     if status == "missing":
         title = "This file has no test rows of its own"
         message = ("An official test is registered for this file, but the "
-                   "file carries no rows. Test runs use the official test, "
-                   "so the result you see still matches your grade.")
+                   "file carries no rows. Test runs use the official test.")
         fix = _FIX_MISSING
     else:
         title = "Your testcase is not the official test"
-        message = ("An official test is registered for this file, and the "
-                   "rows in it are not the official ones. Test runs use the "
-                   "official test instead, so the result you see still "
-                   "matches your grade. Your own rows stay in the file, "
-                   "untouched.")
-        fix = _FIX_MODIFIED
+        message = ""
+        fix = _fix_modified()
 
     return [Issue(
         kind=KIND,

@@ -178,9 +178,10 @@ _CTRL_BITS = {
     "Branch": 14, "Jump": 15, "Jalr": 16,
 }
 _CTRL_OUTPUTS = tuple((n, 1) for n in _CTRL_BITS)
-_LAB5_OUTPUTS = tuple((n, 1) for n in (
+_LAB5_BITS_OUTPUTS = tuple((n, 1) for n in (
     "RegWrite", "ALUSrc", "ALUOp3", "ImmSrc1", "ImmSrc0",
     "ALUOp2", "ALUOp1", "ALUOp0"))
+_LAB5_OUTPUTS = (("RegWrite", 1), ("ALUSrc", 1), ("ImmSrc", 2), ("ALUOp", 4))
 
 
 def _decode(opcode: int, f3: int, f7: int, table, default: int) -> int:
@@ -203,13 +204,24 @@ def _control_rv32i(i, _s):
     w = _decode(i["opcode"] & 0x7F, i["funct3"] & 7, i["funct7"] & 0x7F,
                 _RV32I_TABLE, 0)
     return _ctrl_outputs(w), None
-_LAB5_TABLE = _RV32I_TABLE[:8]
+_LAB5_BITS_TABLE = _RV32I_TABLE[:8]
+
+
+def _control_lab5_bits(i, _s):
+    w = _decode(i["opcode"] & 0x7F, i["funct3"] & 7, i["funct7"] & 0x7F,
+                _LAB5_BITS_TABLE, _LAB5_BITS_TABLE[0][1])
+    return _ctrl_outputs(w), None
+
+
+_LAB5_TABLE = _RV32I_TABLE[:8] + _RV32I_TABLE[9:12]
+_LAB5_NO_INSTRUCTION = _ctrl_word(rw=0, alu="ADD")
 
 
 def _control_lab5(i, _s):
     w = _decode(i["opcode"] & 0x7F, i["funct3"] & 7, i["funct7"] & 0x7F,
-                _LAB5_TABLE, _LAB5_TABLE[0][1])
-    return _ctrl_outputs(w), None
+                _LAB5_TABLE, _LAB5_NO_INSTRUCTION)
+    return {"RegWrite": (w >> 7) & 1, "ALUSrc": (w >> 6) & 1,
+            "ImmSrc": (w >> 4) & 3, "ALUOp": w & 15}, None
 
 
 def _register_file(i, state):
@@ -341,9 +353,17 @@ MODELS: tuple[FormulaModel, ...] = (
     FormulaModel(
         "lab5_control",
         "Control unit: decodes opcode/funct3/funct7 into the datapath's "
-        "control signals for the eight Lab 5 instructions.",
+        "control signals for the eleven Lab 5 instructions; anything else "
+        "leaves RegWrite at 0.",
         (("opcode", 7), ("funct3", 3), ("funct7", 7)), _LAB5_OUTPUTS,
         _control_lab5),
+    FormulaModel(
+        "lab5_control_bits",
+        "Control unit (earlier Lab 5 pins, one output per bit): decodes "
+        "opcode/funct3/funct7 into the control signals for eight "
+        "instructions.",
+        (("opcode", 7), ("funct3", 3), ("funct7", 7)), _LAB5_BITS_OUTPUTS,
+        _control_lab5_bits),
     FormulaModel(
         "rv32i_control",
         "Control unit: decodes opcode/funct3/funct7 into the datapath's "
@@ -539,7 +559,20 @@ def resolver_for(circuit, manifest: dict | None = None,
         if wanted:
             model = BY_NAME.get(wanted)
             if model is None or model not in candidates(child):
-                if notes is not None:
+                fitted = None
+                for other in candidates(child):
+                    ok, detail = validate(other, child)
+                    if ok:
+                        fitted = (other, detail)
+                        break
+                if fitted is not None:
+                    decided[cid] = fitted[0]
+                    if notes is not None:
+                        notes.append(
+                            f"{reference}: manifest model {wanted!r} does "
+                            f"not fit this file's interface; formula model "
+                            f"{fitted[0].name} fits ({fitted[1]}).")
+                elif notes is not None:
                     notes.append(
                         f"{reference}: manifest model {wanted!r} does not "
                         f"fit this file's interface; simulated as drawn.")

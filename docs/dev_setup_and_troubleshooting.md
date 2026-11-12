@@ -116,3 +116,19 @@ export DIGITAL_JAR=/path_to_Digital/Digital.jar
 # Windows PowerShell
 $env:DIGITAL_JAR = "C:\path_to_Digital\Digital.jar"
 ```
+
+## Checking a suspected Layer 1 false positive against Digital
+
+Layer 1 works from DLC's own table of pin positions. When it calls a pin
+undriven or dangling on a circuit that passes in Digital, ask Digital where
+the pins really are:
+
+```
+uv run python scripts/digital_oracle/oracle.py check path/to/submission_folder
+```
+
+Each file prints `same as Digital` or the pins DLC places or connects
+differently (`MISSED`, `PHANTOM`, `DIR`, `NETS`). It needs Java and the
+Digital.jar configured above; the files are read locally. A `MISSED` line
+on a supported element means an offset in `dlc/parser/pin_geometry.py` is
+wrong.

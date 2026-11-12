@@ -85,7 +85,8 @@ def test_lazy_word_reason_flags_only_the_certain_cases():
 
 def test_encode_category_word_round_trips_every_lab5_category():
     cats = [c["name"] for c in _LAB5["categories"]["control-unit.dig"]]
-    assert len(cats) == 8
+    assert cats == ["add", "sub", "and", "or", "slt", "addi", "slti", "andi",
+                    "sll", "srl", "sra"]
     for name in cats:
         w = mf.encode_category_word(_LAB5, name, rd=7, rs1=5, rs2=6, imm=9)
         assert w is not None, name

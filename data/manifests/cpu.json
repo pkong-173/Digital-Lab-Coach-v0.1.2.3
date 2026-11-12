@@ -19,7 +19,7 @@
     },
     "control-unit.dig": {
       "model": "lab5_control",
-      "role": "Control unit: decodes opcode/funct3/funct7 into the datapath's control signals for the eight Lab 5 instructions."
+      "role": "Control unit: decodes opcode/funct3/funct7 into the datapath's control signals for the eleven Lab 5 instructions; anything else leaves RegWrite at 0."
     },
     "register-file.dig": {
       "model": "rv32i_register_file",
@@ -65,21 +65,24 @@
         "name": "and",
         "when": {
           "opcode": "0b0110011",
-          "funct3": "0b111"
+          "funct3": "0b111",
+          "funct7": "0b0000000"
         }
       },
       {
         "name": "or",
         "when": {
           "opcode": "0b0110011",
-          "funct3": "0b110"
+          "funct3": "0b110",
+          "funct7": "0b0000000"
         }
       },
       {
         "name": "slt",
         "when": {
           "opcode": "0b0110011",
-          "funct3": "0b010"
+          "funct3": "0b010",
+          "funct7": "0b0000000"
         }
       },
       {
@@ -101,6 +104,30 @@
         "when": {
           "opcode": "0b0010011",
           "funct3": "0b111"
+        }
+      },
+      {
+        "name": "sll",
+        "when": {
+          "opcode": "0b0110011",
+          "funct3": "0b001",
+          "funct7": "0b0000000"
+        }
+      },
+      {
+        "name": "srl",
+        "when": {
+          "opcode": "0b0110011",
+          "funct3": "0b101",
+          "funct7": "0b0000000"
+        }
+      },
+      {
+        "name": "sra",
+        "when": {
+          "opcode": "0b0110011",
+          "funct3": "0b101",
+          "funct7": "0b0100000"
         }
       }
     ],
@@ -158,20 +185,14 @@
         "when": {
           "ALUOp": "0b1000"
         }
-      },
-      {
-        "name": "SLTU",
-        "when": {
-          "ALUOp": "0b1001"
-        }
       }
     ]
   },
   "official_tests": {
     "cpu.dig": "52845cf7436dee1da97c4bf4b96ca4cb49f8322a",
-    "alu.dig": "67fc380408bfda56279dc361a74de034fe3b1e39",
-    "control-unit.dig": "95c7b8dd203dc9090174bb3582d90cb7876516cc",
-    "register-file.dig": "9e23eb3263f5675688324ffd07a3f33eb66c171c",
+    "alu.dig": "9ac80e3138ffc3028794cfd2e0a08612534ee3fd",
+    "control-unit.dig": "f4b7af5254e3f123d312506e875454bada703630",
+    "register-file.dig": "d88b94e2dd2542799504c43f55796aecae9a0b84",
     "add-sub-unit.dig": "35a7905be10b0834244c193f0e0bcc9d72ce3b14",
     "bidirectional-shifter.dig": "232be663c19d6a282fb21a6f31985ed4f1b0c917",
     "boolean-unit.dig": "8ab26519b2066ca6ad4b01bad1fff793f329d298",
